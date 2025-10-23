@@ -247,6 +247,8 @@ network_map <- network_map %>%
 cat("Adding", nrow(connections), "connections...\n")
 pb <- txtProgressBar(min = 0, max = nrow(connections), style = 3)
 
+color_palette <- c("#3498db", "#2ecc71", "#9b59b6", "#f39c12", "#1abc9c")
+
 for (i in 1:nrow(connections)) {
   setTxtProgressBar(pb, i)
 
