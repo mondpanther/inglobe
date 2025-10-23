@@ -1,8 +1,8 @@
 # Random World City Network with 200 Cities and 300 Connections
-# Required packages: leaflet, dplyr, geosphere, maps
+# Required packages: leaflet, dplyr, geosphere, maps, RColorBrewer
 
 # Install packages if needed
-# install.packages(c("leaflet", "dplyr", "geosphere", "maps"))
+# install.packages(c("leaflet", "dplyr", "geosphere", "maps", "RColorBrewer", "htmlwidgets"))
 
 library(leaflet)
 library(dplyr)
@@ -220,8 +220,34 @@ network_map <- network_map %>%
   )
 
 # Add all connections with offsets for parallel routes
-# Color palette for connections
-connection_colors <- c("#3498db", "#e74c3c", "#2ecc71", "#9b59b6", "#f39c12")
+# Create country-based color palette
+# Get unique countries from cities with outgoing connections
+countries_with_connections <- connection_counts %>%
+  left_join(major_cities, by = c("from_id" = "city_id")) %>%
+  distinct(country.etc) %>%
+  pull(country.etc)
+
+# Generate distinct colors for each country using a colorful palette
+library(RColorBrewer)
+# Use a combination of color palettes to get enough distinct colors
+n_countries <- length(countries_with_connections)
+
+if (n_countries <= 12) {
+  country_colors <- brewer.pal(max(3, n_countries), "Set3")[1:n_countries]
+} else if (n_countries <= 24) {
+  country_colors <- c(
+    brewer.pal(12, "Set3"),
+    brewer.pal(max(3, n_countries - 12), "Paired")
+  )[1:n_countries]
+} else {
+  # For many countries, use rainbow with high saturation
+  country_colors <- rainbow(n_countries, s = 0.8, v = 0.8)
+}
+
+# Create named vector mapping country to color
+country_color_map <- setNames(country_colors, countries_with_connections)
+
+cat("\nColor-coding connections from", n_countries, "different countries\n")
 
 for (i in 1:nrow(connection_counts)) {
   # Get from and to cities
@@ -246,10 +272,9 @@ for (i in 1:nrow(connection_counts)) {
     offset_factor = offset_factor,
     n_points = 100
   )
-  
-  # Choose color (cycle through palette)
-  color_idx <- (connection_counts$from_id[i] %% length(connection_colors)) + 1
-  route_color <- connection_colors[color_idx]
+
+  # Choose color based on origin country
+  route_color <- country_color_map[from_city$country.etc]
   
   # Add route with arrow
   network_map <- add_arrow_decorator(
@@ -258,7 +283,8 @@ for (i in 1:nrow(connection_counts)) {
     color = route_color,
     weight = 1.5,
     opacity = 0.4,
-    label = paste(from_city$city_label, "→", to_city$city_label),
+    label = paste0(from_city$city_label, " → ", to_city$city_label,
+                   " (from ", from_city$country.etc, ")"),
     group = "Connections"
   )
   
@@ -309,6 +335,29 @@ out_degree <- connection_counts %>%
 
 cat("Average in-degree:", round(mean(in_degree$in_deg), 2), "\n")
 cat("Average out-degree:", round(mean(out_degree$out_deg), 2), "\n")
+
+# Country-based connection statistics
+cat("\n=== COUNTRY COLOR MAPPING ===\n")
+country_connection_stats <- connection_counts %>%
+  left_join(major_cities, by = c("from_id" = "city_id")) %>%
+  group_by(country.etc) %>%
+  summarise(
+    num_connections = n(),
+    num_cities = n_distinct(from_id)
+  ) %>%
+  arrange(desc(num_connections)) %>%
+  mutate(color = country_color_map[country.etc])
+
+cat("Top 15 countries by number of outgoing connections:\n")
+top_countries <- head(country_connection_stats, 15)
+for (i in 1:nrow(top_countries)) {
+  cat(sprintf("  %2d. %-25s: %3d connections, %2d cities (color: %s)\n",
+              i,
+              top_countries$country.etc[i],
+              top_countries$num_connections[i],
+              top_countries$num_cities[i],
+              top_countries$color[i]))
+}
 
 # Parallel connections statistics
 parallel_stats <- connection_counts %>%
@@ -380,12 +429,26 @@ create_smaller_network <- function(n_cities = 50, n_connections = 50) {
       fillOpacity = 0.8,
       popup = ~city_label
     )
-  
+
+  # Create country color mapping for small network
+  small_countries <- small_connections %>%
+    left_join(small_cities, by = c("from_id" = "city_id")) %>%
+    distinct(country.etc) %>%
+    pull(country.etc)
+
+  n_small_countries <- length(small_countries)
+  if (n_small_countries <= 12) {
+    small_country_colors <- brewer.pal(max(3, n_small_countries), "Set3")[1:n_small_countries]
+  } else {
+    small_country_colors <- rainbow(n_small_countries, s = 0.8, v = 0.8)
+  }
+  small_country_color_map <- setNames(small_country_colors, small_countries)
+
   # Add connections
   for (i in 1:nrow(small_connections)) {
     from_city <- small_cities[small_cities$city_id == small_connections$from_id[i], ]
     to_city <- small_cities[small_cities$city_id == small_connections$to_id[i], ]
-    
+
     # Calculate offset
     if (small_connections$pair_count[i] > 1) {
       offset_magnitude <- ceiling(small_connections$pair_index[i] / 2) * 0.4
@@ -394,20 +457,24 @@ create_smaller_network <- function(n_cities = 50, n_connections = 50) {
     } else {
       offset_factor <- 0
     }
-    
+
     route <- create_offset_route(
       from_city$long, from_city$lat,
       to_city$long, to_city$lat,
       offset_factor = offset_factor
     )
-    
+
+    # Use country-based color
+    route_color <- small_country_color_map[from_city$country.etc]
+
     small_map <- add_arrow_decorator(
       small_map,
       route,
-      color = "#3498db",
+      color = route_color,
       weight = 2,
       opacity = 0.6,
-      label = paste(from_city$city_label, "→", to_city$city_label)
+      label = paste0(from_city$city_label, " → ", to_city$city_label,
+                     " (from ", from_city$country.etc, ")")
     )
   }
   
