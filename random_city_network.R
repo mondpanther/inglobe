@@ -1,11 +1,11 @@
 # Random World City Network with 200 Cities and 200 Connections
-# Required packages: leaflet, dplyr, geosphere, maps, RColorBrewer
+# Required packages: leaflet, dplyr, geosphere, maps, htmlwidgets
 
 # Install packages if needed
-# install.packages(c("leaflet", "dplyr", "geosphere", "maps", "RColorBrewer", "htmlwidgets"))
+# install.packages(c("leaflet", "dplyr", "geosphere", "maps", "htmlwidgets"))
 
 # Load required packages with error checking
-required_packages <- c("leaflet", "dplyr", "geosphere", "maps", "RColorBrewer", "htmlwidgets")
+required_packages <- c("leaflet", "dplyr", "geosphere", "maps", "htmlwidgets")
 missing_packages <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
 
 if (length(missing_packages) > 0) {
@@ -18,60 +18,69 @@ library(leaflet)
 library(dplyr)
 library(geosphere)
 library(maps)
+library(htmlwidgets)
 
 # Set seed for reproducibility
 set.seed(123)
 
-# Load world cities data
+cat("=== Random World City Network ===\n\n")
+
+# Step 1: Load and sample world cities
+# =====================================
+
 data(world.cities)
 
 # Check if data loaded successfully
 if (!exists("world.cities")) {
-  stop("Error: world.cities dataset not found. Please install the 'maps' package: install.packages('maps')")
+  stop("Error: world.cities dataset not found. Please install the 'maps' package.")
 }
 
 cat("Loaded", nrow(world.cities), "cities from world.cities dataset\n")
 
 # Filter for larger cities and sample 200 random cities
-# Using cities with population > 100,000 for better distribution
 major_cities <- world.cities %>%
   filter(pop > 100000) %>%
   sample_n(200) %>%
   select(name, country.etc, lat, long, pop) %>%
-  mutate(city_id = 1:n(),
-         city_label = paste0(name, ", ", country.etc))
+  mutate(
+    city_id = 1:n(),
+    city_label = paste0(name, ", ", country.etc)
+  )
 
-head(major_cities)
-cat("Selected", nrow(major_cities), "cities\n")
+cat("Selected", nrow(major_cities), "cities\n\n")
+
 
 # Step 2: Generate 200 random directed connections
 # =================================================
 
-# Generate 600 random directed connections (with replacement)
-n_connections <- 600
+n_connections <- 200
+
+# Generate connections with replacement (allows multiple routes between same cities)
 connections <- data.frame(
-  from_id = sample(major_cities$city_id, 200, replace = TRUE),
-  to_id = sample(major_cities$city_id, 200, replace = TRUE)
+  from_id = sample(major_cities$city_id, n_connections, replace = TRUE),
+  to_id = sample(major_cities$city_id, n_connections, replace = TRUE)
 ) %>%
   filter(from_id != to_id)  # Remove self-loops
 
-cat("Generated", nrow(connections), "connections\n")
+cat("Generated", nrow(connections), "connections (after removing self-loops)\n")
 
-# Count duplicate connections between same city pairs
+# Track duplicate connections for offset visualization
 connections <- connections %>%
   group_by(from_id, to_id) %>%
   mutate(
     connection_count = n(),
-    connection_index = row_number()  # Which duplicate this is (1st, 2nd, 3rd, etc.)
+    connection_index = row_number()
   ) %>%
   ungroup()
 
-cat("Number of duplicate routes:", sum(connections$connection_count > 1), "\n")
+cat("Connections with duplicates:", sum(connections$connection_count > 1), "\n\n")
 
-# Function to check if route crosses dateline and adjust if needed
+
+# Step 3: Helper functions
+# =========================
+
+# Function to adjust coordinates for dateline crossing
 adjust_for_dateline <- function(lon1, lat1, lon2, lat2) {
-  # If longitude difference is > 180, we're crossing the dateline
-  # Adjust coordinates to go the other way around
   if (abs(lon2 - lon1) > 180) {
     if (lon1 < lon2) {
       lon1 <- lon1 + 360
@@ -82,52 +91,47 @@ adjust_for_dateline <- function(lon1, lat1, lon2, lat2) {
   return(list(lon1 = lon1, lat1 = lat1, lon2 = lon2, lat2 = lat2))
 }
 
-# Function to create smooth offset for routes (avoiding kinks)
+# Function to create smooth offset for parallel routes
 offset_route_smooth <- function(route_coords, offset_degrees = 0) {
   if (offset_degrees == 0 || nrow(route_coords) < 3) {
     return(route_coords)
   }
-  
+
   n_points <- nrow(route_coords)
   offset_route <- route_coords
-  
-  # Calculate the midpoint of the route
+
+  # Calculate midpoint
   mid_idx <- round(n_points / 2)
-  
-  # Calculate the perpendicular direction at midpoint
+
+  # Calculate perpendicular direction at midpoint
   if (mid_idx > 1 && mid_idx < n_points) {
-    # Use points around midpoint for direction
     idx_before <- max(1, mid_idx - 10)
     idx_after <- min(n_points, mid_idx + 10)
-    
+
     dx <- route_coords[idx_after, 1] - route_coords[idx_before, 1]
     dy <- route_coords[idx_after, 2] - route_coords[idx_before, 2]
-    
-    # Calculate perpendicular direction
+
     length <- sqrt(dx^2 + dy^2)
     if (length > 0) {
       perp_x <- -dy / length
       perp_y <- dx / length
-      
-      # Apply smooth offset using a bell curve
+
+      # Apply smooth offset using a sine curve
       for (i in 2:(n_points - 1)) {
-        # Calculate distance from endpoints (0 to 1, peaking at 0.5)
         t <- (i - 1) / (n_points - 1)
-        # Use smooth curve: peaks in middle, tapers to 0 at ends
-        weight <- sin(t * pi)  # Smooth curve from 0 to 1 to 0
-        
-        # Apply weighted offset
+        weight <- sin(t * pi)  # Peaks in middle, tapers to 0 at ends
+
         offset_route[i, 1] <- route_coords[i, 1] + perp_x * offset_degrees * weight
         offset_route[i, 2] <- route_coords[i, 2] + perp_y * offset_degrees * weight
       }
     }
   }
-  
+
   return(offset_route)
 }
 
 # Function to add arrow decorator to polylines
-add_arrow_decorator <- function(map, route_coords, color = "#3498db", 
+add_arrow_decorator <- function(map, route_coords, color = "#3498db",
                                 weight = 2, opacity = 0.6, label = NULL) {
   # Add the main polyline
   map <- map %>%
@@ -139,26 +143,24 @@ add_arrow_decorator <- function(map, route_coords, color = "#3498db",
       opacity = opacity,
       label = label
     )
-  
-  # Calculate arrow position (near the end of the line)
+
+  # Calculate arrow position (85% along the route)
   n_points <- nrow(route_coords)
   arrow_pos <- round(n_points * 0.85)
-  
+
   if (arrow_pos < n_points - 5 && arrow_pos > 0) {
     # Get direction vector for arrow
     p1 <- route_coords[arrow_pos, ]
     p2 <- route_coords[min(arrow_pos + 5, n_points), ]
-    
-    # Calculate arrow head points
+
+    # Calculate arrow head
     dx <- p2[1] - p1[1]
     dy <- p2[2] - p1[2]
     angle <- atan2(dy, dx)
-    
-    # Arrow parameters
+
     arrow_length <- 1.5
     arrow_angle <- 25 * pi / 180
-    
-    # Calculate arrow head points
+
     arrow_left <- c(
       p2[1] - arrow_length * cos(angle - arrow_angle),
       p2[2] - arrow_length * sin(angle - arrow_angle)
@@ -167,7 +169,7 @@ add_arrow_decorator <- function(map, route_coords, color = "#3498db",
       p2[1] - arrow_length * cos(angle + arrow_angle),
       p2[2] - arrow_length * sin(angle + arrow_angle)
     )
-    
+
     # Draw arrow head
     map <- map %>%
       addPolylines(
@@ -178,25 +180,25 @@ add_arrow_decorator <- function(map, route_coords, color = "#3498db",
         opacity = opacity
       )
   }
-  
+
   return(map)
 }
 
 
-# Step 5: Create the network map
+# Step 4: Create the network map
 # ===============================
 
-cat("\nCreating map... (this may take a minute with 200+ connections)\n")
+cat("Creating interactive map...\n")
 
 # Create base map
 network_map <- leaflet() %>%
   addProviderTiles(providers$CartoDB.DarkMatter) %>%
   setView(lng = 0, lat = 20, zoom = 2)
 
-# Add city markers (smaller to avoid clutter)
-map <- map %>%
+# Add city markers
+network_map <- network_map %>%
   addCircleMarkers(
-    data = selected_cities,
+    data = major_cities,
     lng = ~long,
     lat = ~lat,
     radius = 3,
@@ -204,27 +206,30 @@ map <- map %>%
     fillColor = "#e74c3c",
     fillOpacity = 0.7,
     stroke = FALSE,
-    popup = ~label
+    popup = ~paste0("<b>", city_label, "</b><br>",
+                    "Population: ", format(pop, big.mark = ","))
   )
 
-# Add connections with offset for duplicates
-cat("Adding connections...\n")
+# Add connections with progress bar
+cat("Adding", nrow(connections), "connections...\n")
 pb <- txtProgressBar(min = 0, max = nrow(connections), style = 3)
+
+color_palette <- c("#3498db", "#2ecc71", "#9b59b6", "#f39c12", "#1abc9c")
 
 for (i in 1:nrow(connections)) {
   setTxtProgressBar(pb, i)
-  
-  from_city <- selected_cities[selected_cities$city_id == connections$from_id[i], ]
-  to_city <- selected_cities[selected_cities$city_id == connections$to_id[i], ]
-  
+
+  from_city <- major_cities[major_cities$city_id == connections$from_id[i], ]
+  to_city <- major_cities[major_cities$city_id == connections$to_id[i], ]
+
   if (nrow(from_city) > 0 && nrow(to_city) > 0) {
-    # Adjust coordinates for dateline crossing
+    # Adjust for dateline crossing
     adjusted <- adjust_for_dateline(
       from_city$long, from_city$lat,
       to_city$long, to_city$lat
     )
-    
-    # Calculate great circle route with adjusted coordinates
+
+    # Calculate great circle route
     route <- gcIntermediate(
       c(adjusted$lon1, adjusted$lat1),
       c(adjusted$lon2, adjusted$lat2),
@@ -232,55 +237,46 @@ for (i in 1:nrow(connections)) {
       addStartEnd = TRUE,
       sp = FALSE
     )
-    
-    # Normalize longitudes back to -180 to 180 range
+
+    # Normalize longitudes to -180 to 180 range
     route[, 1] <- ifelse(route[, 1] > 180, route[, 1] - 360, route[, 1])
     route[, 1] <- ifelse(route[, 1] < -180, route[, 1] + 360, route[, 1])
-    
-    # Apply smooth offset if this is a duplicate route
+
+    # Apply smooth offset for duplicate routes
     if (connections$connection_count[i] > 1) {
-      # Calculate offset based on which duplicate this is
       offset_multiplier <- ceiling(connections$connection_index[i] / 2)
       offset_direction <- ifelse(connections$connection_index[i] %% 2 == 1, 1, -1)
       offset_degrees <- offset_direction * offset_multiplier * 0.8
-      
+
       route <- offset_route_smooth(route, offset_degrees)
     }
-    
-    # Vary colors slightly for visual interest
-    color_options <- c("#3498db", "#2ecc71", "#9b59b6", "#f39c12", "#1abc9c")
-    route_color <- sample(color_options, 1)
-    
+
+    # Vary colors
+    route_color <- sample(color_palette, 1)
+
     # Add route with arrow
-    map <- add_arrow_decorator(
-      map,
+    network_map <- add_arrow_decorator(
+      network_map,
       route,
       color = route_color,
       weight = 1.5,
       opacity = 0.4,
-      label = paste(from_city$label, "→", to_city$label)
+      label = paste(from_city$city_label, "→", to_city$city_label)
     )
   }
 }
 
 close(pb)
-
-cat("\nMap created successfully!\n")
-print(map)
-
-# Optional: Save the map
-# library(htmlwidgets)
-# saveWidget(map, "random_world_network.html", selfcontained = TRUE)
+cat("\n\nMap created successfully!\n")
 
 
-# ============================================================================
-# ALTERNATIVE VERSION: Cleaner visualization with connection statistics
-# ============================================================================
+# Step 5: Calculate and display statistics
+# =========================================
 
-cat("\n\nCreating alternative version with statistics...\n")
+cat("\n=== Network Statistics ===\n")
 
-# Calculate connection statistics
-city_connections <- connections %>%
+# Calculate connection statistics per city
+city_stats <- connections %>%
   group_by(from_id) %>%
   summarise(outgoing = n()) %>%
   full_join(
@@ -296,102 +292,22 @@ city_connections <- connections %>%
   )
 
 # Merge with cities
-selected_cities <- selected_cities %>%
-  left_join(city_connections, by = c("city_id" = "from_id")) %>%
+major_cities_with_stats <- major_cities %>%
+  left_join(city_stats, by = c("city_id" = "from_id")) %>%
   mutate(
     total = ifelse(is.na(total), 0, total),
     incoming = ifelse(is.na(incoming), 0, incoming),
     outgoing = ifelse(is.na(outgoing), 0, outgoing)
   )
 
-# Create map with sized markers based on connectivity
-map2 <- leaflet() %>%
-  addProviderTiles(providers$CartoDB.DarkMatter) %>%
-  setView(lng = 0, lat = 20, zoom = 2)
-
-# Add city markers with size based on number of connections
-map2 <- map2 %>%
-  addCircleMarkers(
-    data = selected_cities,
-    lng = ~long,
-    lat = ~lat,
-    radius = ~sqrt(total) + 2,  # Size based on total connections
-    color = "#f39c12",
-    fillColor = "#f39c12",
-    fillOpacity = 0.6,
-    stroke = TRUE,
-    weight = 1,
-    popup = ~paste0(
-      "<b>", label, "</b><br>",
-      "Outgoing: ", outgoing, "<br>",
-      "Incoming: ", incoming, "<br>",
-      "Total: ", total
-    )
-  )
-
-# Add connections (sample subset for cleaner visualization)
-sample_connections <- connections %>%
-  sample_n(min(300, nrow(connections)))  # Show 300 connections for cleaner view
-
-for (i in 1:nrow(sample_connections)) {
-  from_city <- selected_cities[selected_cities$city_id == sample_connections$from_id[i], ]
-  to_city <- selected_cities[selected_cities$city_id == sample_connections$to_id[i], ]
-  
-  if (nrow(from_city) > 0 && nrow(to_city) > 0) {
-    # Adjust coordinates for dateline crossing
-    adjusted <- adjust_for_dateline(
-      from_city$long, from_city$lat,
-      to_city$long, to_city$lat
-    )
-    
-    # Calculate great circle route with adjusted coordinates
-    route <- gcIntermediate(
-      c(adjusted$lon1, adjusted$lat1),
-      c(adjusted$lon2, adjusted$lat2),
-      n = 100,
-      addStartEnd = TRUE,
-      sp = FALSE
-    )
-    
-    # Normalize longitudes back to -180 to 180 range
-    route[, 1] <- ifelse(route[, 1] > 180, route[, 1] - 360, route[, 1])
-    route[, 1] <- ifelse(route[, 1] < -180, route[, 1] + 360, route[, 1])
-    
-    # Apply smooth offset for duplicates
-    if (sample_connections$connection_count[i] > 1) {
-      offset_multiplier <- ceiling(sample_connections$connection_index[i] / 2)
-      offset_direction <- ifelse(sample_connections$connection_index[i] %% 2 == 1, 1, -1)
-      offset_degrees <- offset_direction * offset_multiplier * 0.8
-      route <- offset_route_smooth(route, offset_degrees)
-    }
-    
-    map2 <- add_arrow_decorator(
-      map2,
-      route,
-      color = "#3498db",
-      weight = 1,
-      opacity = 0.3
-    )
-  }
-}
-
-cat("Alternative map created!\n")
-print(map2)
-
-
-# ============================================================================
-# PRINT SUMMARY STATISTICS
-# ============================================================================
-
-cat("\n=== Network Statistics ===\n")
-cat("Total cities:", nrow(selected_cities), "\n")
+cat("Total cities:", nrow(major_cities), "\n")
 cat("Total connections:", nrow(connections), "\n")
-cat("Average connections per city:", round(mean(selected_cities$total), 2), "\n")
-cat("Most connected city:", 
-    selected_cities$label[which.max(selected_cities$total)],
-    "with", max(selected_cities$total), "connections\n")
-cat("Cities with no connections:", 
-    sum(selected_cities$total == 0), "\n")
+cat("Average connections per city:", round(mean(major_cities_with_stats$total), 2), "\n")
+cat("Most connected city:",
+    major_cities_with_stats$city_label[which.max(major_cities_with_stats$total)],
+    "with", max(major_cities_with_stats$total), "connections\n")
+cat("Cities with no connections:",
+    sum(major_cities_with_stats$total == 0), "\n")
 
 # Find city pairs with most connections
 duplicate_pairs <- connections %>%
@@ -403,8 +319,21 @@ duplicate_pairs <- connections %>%
 if (nrow(duplicate_pairs) > 0) {
   cat("\nTop city pairs with multiple connections:\n")
   for (i in 1:min(5, nrow(duplicate_pairs))) {
-    from <- selected_cities$label[selected_cities$city_id == duplicate_pairs$from_id[i]]
-    to <- selected_cities$label[selected_cities$city_id == duplicate_pairs$to_id[i]]
+    from <- major_cities$city_label[major_cities$city_id == duplicate_pairs$from_id[i]]
+    to <- major_cities$city_label[major_cities$city_id == duplicate_pairs$to_id[i]]
     cat(sprintf("  %s → %s: %d connections\n", from, to, duplicate_pairs$count[i]))
   }
 }
+
+cat("\n")
+
+
+# Step 6: Display and optionally save the map
+# ============================================
+
+# Display the map
+print(network_map)
+
+# Save the map (uncomment to save)
+# saveWidget(network_map, "random_world_network.html", selfcontained = TRUE)
+# cat("Map saved to: random_world_network.html\n")
