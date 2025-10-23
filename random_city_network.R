@@ -4,6 +4,16 @@
 # Install packages if needed
 # install.packages(c("leaflet", "dplyr", "geosphere", "maps", "RColorBrewer", "htmlwidgets"))
 
+# Load required packages with error checking
+required_packages <- c("leaflet", "dplyr", "geosphere", "maps", "RColorBrewer", "htmlwidgets")
+missing_packages <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
+
+if (length(missing_packages) > 0) {
+  stop(paste("Missing required packages:", paste(missing_packages, collapse = ", "),
+             "\nPlease install them using: install.packages(c('",
+             paste(missing_packages, collapse = "', '"), "'))", sep = ""))
+}
+
 library(leaflet)
 library(dplyr)
 library(geosphere)
@@ -17,6 +27,13 @@ set.seed(123)  # For reproducibility - remove or change for different random net
 # Load world cities from the maps package
 data(world.cities)
 
+# Check if data loaded successfully
+if (!exists("world.cities")) {
+  stop("Error: world.cities dataset not found. Please install the 'maps' package: install.packages('maps')")
+}
+
+cat("Loaded", nrow(world.cities), "cities from world.cities dataset\n")
+
 # Filter for larger cities and sample 200 random cities
 # Using cities with population > 100,000 for better distribution
 major_cities <- world.cities %>%
@@ -27,7 +44,7 @@ major_cities <- world.cities %>%
          city_label = paste0(name, ", ", country.etc))
 
 head(major_cities)
-cat("\nSelected", nrow(major_cities), "cities\n")
+cat("Selected", nrow(major_cities), "cities\n")
 
 # Step 2: Generate 200 random directed connections
 # =================================================
