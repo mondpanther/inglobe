@@ -18,4 +18,4 @@ cat("==============================================\n\n")
 cat("The app will open in your web browser.\n")
 cat("Press Ctrl+C or Esc to stop the app.\n\n")
 
-shiny::runApp("city_network_app.R", launch.browser = TRUE)
+shiny::runApp("app.R", launch.browser = TRUE)
