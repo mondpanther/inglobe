@@ -3,8 +3,8 @@
 # Usage: source("run_app.R") or Rscript run_app.R
 
 # Check and install required packages
-required_packages <- c("shiny", "leaflet", "dplyr", "geosphere", "maps", "RColorBrewer")
-missing_packages <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
+#required_packages <- c("shiny", "leaflet", "dplyr", "geosphere", "maps", "RColorBrewer")
+#missing_packages <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
 
 if (length(missing_packages) > 0) {
   cat("Installing missing packages:", paste(missing_packages, collapse = ", "), "\n")
