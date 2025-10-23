@@ -1,5 +1,5 @@
-# Random World Network Map with 200 Cities and 600 Connections
-# Required packages: leaflet, dplyr, geosphere, maps
+# Random World City Network with 200 Cities and 200 Connections
+# Required packages: leaflet, dplyr, geosphere, maps, RColorBrewer
 
 # Install packages if needed
 # install.packages(c("leaflet", "dplyr", "geosphere", "maps", "RColorBrewer", "htmlwidgets"))
@@ -27,13 +27,14 @@ selected_cities <- world.cities %>%
   mutate(city_id = row_number(),
          label = paste0(name, ", ", country.etc))
 
-cat("Selected", nrow(selected_cities), "cities\n")
+# Step 2: Generate 200 random directed connections
+# =================================================
 
 # Generate 600 random directed connections (with replacement)
 n_connections <- 600
 connections <- data.frame(
-  from_id = sample(selected_cities$city_id, n_connections, replace = TRUE),
-  to_id = sample(selected_cities$city_id, n_connections, replace = TRUE)
+  from_id = sample(major_cities$city_id, 200, replace = TRUE),
+  to_id = sample(major_cities$city_id, 200, replace = TRUE)
 ) %>%
   filter(from_id != to_id)  # Remove self-loops
 
@@ -164,10 +165,15 @@ add_arrow_decorator <- function(map, route_coords, color = "#3498db",
   return(map)
 }
 
-# Create the base map
-cat("Creating map...\n")
-map <- leaflet() %>%
-  addProviderTiles(providers$CartoDB.Positron) %>%
+
+# Step 5: Create the network map
+# ===============================
+
+cat("\nCreating map... (this may take a minute with 200+ connections)\n")
+
+# Create base map
+network_map <- leaflet() %>%
+  addProviderTiles(providers$CartoDB.DarkMatter) %>%
   setView(lng = 0, lat = 20, zoom = 2)
 
 # Add city markers (smaller to avoid clutter)
