@@ -1,18 +1,8 @@
-# Random World City Network with 200 Cities and 200 Connections
-# Required packages: leaflet, dplyr, geosphere, maps, RColorBrewer
+# Random World Network Map with 200 Cities and 600 Connections
+# Required packages: leaflet, dplyr, geosphere, maps
 
 # Install packages if needed
 # install.packages(c("leaflet", "dplyr", "geosphere", "maps", "RColorBrewer", "htmlwidgets"))
-
-# Load required packages with error checking
-required_packages <- c("leaflet", "dplyr", "geosphere", "maps", "RColorBrewer", "htmlwidgets")
-missing_packages <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
-
-if (length(missing_packages) > 0) {
-  stop(paste("Missing required packages:", paste(missing_packages, collapse = ", "),
-             "\nPlease install them using: install.packages(c('",
-             paste(missing_packages, collapse = "', '"), "'))", sep = ""))
-}
 
 library(leaflet)
 library(dplyr)
@@ -25,33 +15,25 @@ set.seed(123)
 # Load world cities data
 data(world.cities)
 
-# Check if data loaded successfully
-if (!exists("world.cities")) {
-  stop("Error: world.cities dataset not found. Please install the 'maps' package: install.packages('maps')")
-}
+# Filter to get reasonably sized cities and clean data
+world.cities <- world.cities %>%
+  filter(pop > 100000) %>%  # Cities with population > 100k
+  filter(!is.na(lat) & !is.na(long)) %>%
+  select(name, country.etc, lat, long, pop)
 
-cat("Loaded", nrow(world.cities), "cities from world.cities dataset\n")
-
-# Filter for larger cities and sample 200 random cities
-# Using cities with population > 100,000 for better distribution
-major_cities <- world.cities %>%
-  filter(pop > 100000) %>%
+# Randomly sample 200 cities
+selected_cities <- world.cities %>%
   sample_n(200) %>%
-  select(name, country.etc, lat, long, pop) %>%
-  mutate(city_id = 1:n(),
-         city_label = paste0(name, ", ", country.etc))
+  mutate(city_id = row_number(),
+         label = paste0(name, ", ", country.etc))
 
-head(major_cities)
-cat("Selected", nrow(major_cities), "cities\n")
-
-# Step 2: Generate 200 random directed connections
-# =================================================
+cat("Selected", nrow(selected_cities), "cities\n")
 
 # Generate 600 random directed connections (with replacement)
 n_connections <- 600
 connections <- data.frame(
-  from_id = sample(major_cities$city_id, 200, replace = TRUE),
-  to_id = sample(major_cities$city_id, 200, replace = TRUE)
+  from_id = sample(selected_cities$city_id, n_connections, replace = TRUE),
+  to_id = sample(selected_cities$city_id, n_connections, replace = TRUE)
 ) %>%
   filter(from_id != to_id)  # Remove self-loops
 
@@ -182,15 +164,10 @@ add_arrow_decorator <- function(map, route_coords, color = "#3498db",
   return(map)
 }
 
-
-# Step 5: Create the network map
-# ===============================
-
-cat("\nCreating map... (this may take a minute with 200+ connections)\n")
-
-# Create base map
-network_map <- leaflet() %>%
-  addProviderTiles(providers$CartoDB.DarkMatter) %>%
+# Create the base map
+cat("Creating map...\n")
+map <- leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
   setView(lng = 0, lat = 20, zoom = 2)
 
 # Add city markers (smaller to avoid clutter)
