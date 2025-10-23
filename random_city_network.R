@@ -2,7 +2,7 @@
 # Required packages: leaflet, dplyr, geosphere, maps
 
 # Install packages if needed
-# install.packages(c("leaflet", "dplyr", "geosphere", "maps"))
+# install.packages(c("leaflet", "dplyr", "geosphere", "maps", "RColorBrewer", "htmlwidgets"))
 
 library(leaflet)
 library(dplyr)
