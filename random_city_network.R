@@ -1,5 +1,8 @@
-# Random World City Network with 200 Cities and 200 Connections
+# Random World City Network with 200 Cities
 # Required packages: leaflet, dplyr, geosphere, maps, htmlwidgets, RColorBrewer
+#
+# Generates up to 200 random directed connections between cities
+# Excludes connections that would wrap around the back of the map (causing visual artifacts)
 
 # Install packages if needed
 # install.packages(c("leaflet", "dplyr", "geosphere", "maps", "htmlwidgets", "RColorBrewer"))
@@ -96,6 +99,29 @@ connections <- data.frame(
   filter(from_id != to_id)  # Remove self-loops
 
 cat("Generated", nrow(connections), "connections (after removing self-loops)\n")
+
+# Filter out connections that would wrap around the back of the map
+# These cause vertical lines and kinks in the visualization
+connections_with_coords <- connections %>%
+  left_join(major_cities %>% select(city_id, long, lat),
+            by = c("from_id" = "city_id")) %>%
+  left_join(major_cities %>% select(city_id, long, lat),
+            by = c("to_id" = "city_id"), suffix = c("_from", "_to"))
+
+# Calculate longitude difference and filter
+# If absolute difference > 150 degrees, the route would go around the back
+connections_filtered <- connections_with_coords %>%
+  mutate(lon_diff = abs(long_to - long_from)) %>%
+  filter(lon_diff <= 150)
+
+excluded_count <- nrow(connections) - nrow(connections_filtered)
+cat("Excluded", excluded_count, "connections that would wrap around the back of the map\n")
+
+# Remove the coordinate columns, keeping only the connection IDs
+connections <- connections_filtered %>%
+  select(from_id, to_id)
+
+cat("Remaining connections:", nrow(connections), "\n")
 
 # Track duplicate connections for offset visualization
 connections <- connections %>%
@@ -307,6 +333,7 @@ cat("\n\nMap created successfully!\n")
 # =========================================
 
 cat("\n=== Network Statistics ===\n")
+cat("Note: Connections spanning >150° longitude were excluded to prevent visual artifacts\n\n")
 
 # Calculate connection statistics per city
 city_stats <- connections %>%
