@@ -1,11 +1,11 @@
 # Random World City Network with 200 Cities and 200 Connections
-# Required packages: leaflet, dplyr, geosphere, maps, htmlwidgets
+# Required packages: leaflet, dplyr, geosphere, maps, htmlwidgets, RColorBrewer
 
 # Install packages if needed
-# install.packages(c("leaflet", "dplyr", "geosphere", "maps", "htmlwidgets"))
+# install.packages(c("leaflet", "dplyr", "geosphere", "maps", "htmlwidgets", "RColorBrewer"))
 
 # Load required packages with error checking
-required_packages <- c("leaflet", "dplyr", "geosphere", "maps", "htmlwidgets")
+required_packages <- c("leaflet", "dplyr", "geosphere", "maps", "htmlwidgets", "RColorBrewer")
 missing_packages <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
 
 if (length(missing_packages) > 0) {
@@ -19,6 +19,7 @@ library(dplyr)
 library(geosphere)
 library(maps)
 library(htmlwidgets)
+library(RColorBrewer)
 
 # Set seed for reproducibility
 set.seed(123)
@@ -47,7 +48,39 @@ major_cities <- world.cities %>%
     city_label = paste0(name, ", ", country.etc)
   )
 
-cat("Selected", nrow(major_cities), "cities\n\n")
+cat("Selected", nrow(major_cities), "cities\n")
+
+# Create country color mapping
+unique_countries <- unique(major_cities$country.etc)
+n_countries <- length(unique_countries)
+cat("Number of unique countries:", n_countries, "\n\n")
+
+# Generate distinct colors for each country
+# Using multiple RColorBrewer palettes to get enough distinct colors
+if (n_countries <= 12) {
+  country_colors <- brewer.pal(max(3, n_countries), "Set3")[1:n_countries]
+} else if (n_countries <= 24) {
+  country_colors <- c(
+    brewer.pal(12, "Set3"),
+    brewer.pal(12, "Paired")
+  )[1:n_countries]
+} else {
+  # For more countries, use rainbow with good spacing
+  country_colors <- rainbow(n_countries, s = 0.7, v = 0.9)
+}
+
+# Create color mapping dataframe
+country_color_map <- data.frame(
+  country = unique_countries,
+  color = country_colors,
+  stringsAsFactors = FALSE
+)
+
+# Add country color to cities
+major_cities <- major_cities %>%
+  left_join(country_color_map, by = c("country.etc" = "country"))
+
+cat("Country color mapping created\n\n")
 
 
 # Step 2: Generate 200 random directed connections
@@ -214,8 +247,6 @@ network_map <- network_map %>%
 cat("Adding", nrow(connections), "connections...\n")
 pb <- txtProgressBar(min = 0, max = nrow(connections), style = 3)
 
-color_palette <- c("#3498db", "#2ecc71", "#9b59b6", "#f39c12", "#1abc9c")
-
 for (i in 1:nrow(connections)) {
   setTxtProgressBar(pb, i)
 
@@ -251,8 +282,8 @@ for (i in 1:nrow(connections)) {
       route <- offset_route_smooth(route, offset_degrees)
     }
 
-    # Vary colors
-    route_color <- sample(color_palette, 1)
+    # Use color based on origin country
+    route_color <- from_city$color
 
     # Add route with arrow
     network_map <- add_arrow_decorator(
@@ -260,7 +291,7 @@ for (i in 1:nrow(connections)) {
       route,
       color = route_color,
       weight = 1.5,
-      opacity = 0.4,
+      opacity = 0.5,
       label = paste(from_city$city_label, "→", to_city$city_label)
     )
   }
@@ -323,6 +354,24 @@ if (nrow(duplicate_pairs) > 0) {
     to <- major_cities$city_label[major_cities$city_id == duplicate_pairs$to_id[i]]
     cat(sprintf("  %s → %s: %d connections\n", from, to, duplicate_pairs$count[i]))
   }
+}
+
+# Country statistics
+cat("\n=== Country Statistics ===\n")
+country_stats <- connections %>%
+  left_join(major_cities %>% select(city_id, country.etc, color),
+            by = c("from_id" = "city_id")) %>%
+  group_by(country.etc, color) %>%
+  summarise(outgoing_connections = n(), .groups = "drop") %>%
+  arrange(desc(outgoing_connections))
+
+cat("Top 10 countries by outgoing connections:\n")
+top_countries <- head(country_stats, 10)
+for (i in 1:nrow(top_countries)) {
+  cat(sprintf("  %s: %d connections (color: %s)\n",
+              top_countries$country.etc[i],
+              top_countries$outgoing_connections[i],
+              top_countries$color[i]))
 }
 
 cat("\n")
