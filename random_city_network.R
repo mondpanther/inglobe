@@ -1,4 +1,4 @@
-# Random World City Network with 200 Cities and 300 Connections
+# Random World City Network with 200 Cities and 200 Connections
 # Required packages: leaflet, dplyr, geosphere, maps, RColorBrewer
 
 # Install packages if needed
@@ -29,13 +29,13 @@ major_cities <- world.cities %>%
 head(major_cities)
 cat("\nSelected", nrow(major_cities), "cities\n")
 
-# Step 2: Generate 300 random directed connections
+# Step 2: Generate 200 random directed connections
 # =================================================
 
 # Sample connections with replacement (allows multiple connections between same cities)
 connections <- data.frame(
-  from_id = sample(major_cities$city_id, 300, replace = TRUE),
-  to_id = sample(major_cities$city_id, 300, replace = TRUE)
+  from_id = sample(major_cities$city_id, 200, replace = TRUE),
+  to_id = sample(major_cities$city_id, 200, replace = TRUE)
 ) %>%
   # Remove self-loops (city to itself)
   filter(from_id != to_id) %>%
@@ -195,7 +195,7 @@ add_arrow_decorator <- function(map, route_coords, color = "#3498db",
 # Step 5: Create the network map
 # ===============================
 
-cat("\nCreating map... (this may take a minute with 300+ connections)\n")
+cat("\nCreating map... (this may take a minute with 200+ connections)\n")
 
 # Create base map
 network_map <- leaflet() %>%
