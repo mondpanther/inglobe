@@ -1,0 +1,2 @@
+Sys.setenv(ANTHROPIC_API_KEY = "k-ant-api03-qZDaFEBknH3iIRBuveXJSftT_s_QBmHjBeQNo3jCyAjTWCQCo7yHsKCLF0ryn68rN6nTHVDJlMapHQH7bzmRmw-XS5RTAAA")
+Sys.setenv(MAPBOX_API_KEY = "pk.eyJ1IjoibW9uZHBhbnRoZXIiLCJhIjoiY21oMmFsYWRsMGVkMTJuczlpeTM5cXNqbyJ9.ysoFayPMjYRP43wTyFb75Q")

@@ -1,0 +1,5 @@
+[2,"No personal access token (PAT) available.\r\nObtain a PAT from here:\r\nhttps://github.com/settings/tokens\r\nFor more on what to do with the PAT, see ?gh_whoami.\r\n"]
+[1,"\u001B[1m\u001B[22mUsing \u001B[32mmodel\u001B[39m = \u001B[34m\"claude-sonnet-4-20250514\"\u001B[39m.\r\n"]
+[2,"ERROR: Unknown command \"TMPDIR=C:/Users/rmartin7/AppData/Local/Temp/RtmpgtTQtW/file2b347c4eea4\". Did you mean command \"install\"?\n\nStack trace:\n    at Command.parseArguments (file:///C:/PROGRA~1/RStudio/RESOUR~1/app/bin/quarto/bin/quarto.js:8220:31)\n    at Command.parseCommand (file:///C:/PROGRA~1/RStudio/RESOUR~1/app/bin/quarto/bin/quarto.js:7987:31)\n    at eventLoopTick (ext:core/01_core.js:183:11)\n    at async quarto (file:///C:/PROGRA~1/RStudio/RESOUR~1/app/bin/quarto/bin/quarto.js:115004:5)\n    at async file:///C:/PROGRA~1/RStudio/RESOUR~1/app/bin/quarto/bin/quarto.js:115022:9\n"]
+[2,"Loading required package: shiny\r\n"]
+[2,"Warning: package 'shiny' was built under R version 4.4.3\r\n\r\nListening on http://127.0.0.1:7153\r\n"]
