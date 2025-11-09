@@ -1,0 +1,78 @@
+"0","
+recursive_mapbox=function(){
+  df_filtered <- df %>%
+    anti_join(lat_longs_mapbox, by = ""person_id"")
+  
+  df_filtered=df_filtered %>% mutate(rr=runif(1:n()))  %>% arrange(rr) %>% select(-rr)
+  
+  some_addresses=df_filtered %>% head(1500) %>%  mutate(addressstr=paste(person_address,person_ctry_code,sep="",""))
+  print(nrow(df_filtered))
+  lat_longs_mapbox2 <- some_addresses %>%
+    geocode(addressstr, method = 'mapbox', lat = latitude , long = longitude,full_results=F)
+  
+  
+  lat_longs_mapbox_new=lat_longs_mapbox %>% bind_rows(lat_longs_mapbox2)
+  #lat_longs_mapbox=lat_longs_mapbox %>% bind_rows(lat_longs_mapbox2)
+  return(lat_longs_mapbox_new)
+}
+
+#lat_longs_mapbox=lat_longs_mapbox_new  %>% distinct()
+#lat_longs_mapbox=lat_longs_mapbox  %>% distinct() %>% select(-rr)
+
+
+
+lat_longs_mapbox=recursive_mapbox()
+"
+"1","[1]"
+"1"," 22077068"
+"1","
+"
+"2","Passing 1,380 addresses to the Mapbox single address geocoder
+"
+"2","Warning in query_api(api_url, api_query_parameters, method = method) :"
+"2","
+ "
+"2"," Unprocessable Entity (WebDAV; RFC 4918) (HTTP 422).
+"
+"2","Error: Query too long - 21/20 tokens
+"
+"2","Warning in query_api(api_url, api_query_parameters, method = method) :"
+"2","
+ "
+"2"," Unprocessable Entity (WebDAV; RFC 4918) (HTTP 422).
+"
+"2","Error: Query too long - 24/20 tokens
+"
+"2","Warning in query_api(api_url, api_query_parameters, method = method) :"
+"2","
+ "
+"2"," Unprocessable Entity (WebDAV; RFC 4918) (HTTP 422).
+"
+"2","Error: Query too long - 22/20 tokens
+"
+"2","Warning in query_api(api_url, api_query_parameters, method = method) :"
+"2","
+ "
+"2"," Unprocessable Entity (WebDAV; RFC 4918) (HTTP 422).
+"
+"2","Error: Query too long - 21/20 tokens
+"
+"2","Warning in query_api(api_url, api_query_parameters, method = method) :"
+"2","
+ "
+"2"," Unprocessable Entity (WebDAV; RFC 4918) (HTTP 422).
+"
+"2","Error: Query too long - 22/20 tokens
+"
+"2","Warning in query_api(api_url, api_query_parameters, method = method) :"
+"2","
+ "
+"2"," Unprocessable Entity (WebDAV; RFC 4918) (HTTP 422).
+"
+"2","Error: Query too long - 21/20 tokens
+"
+"2","Query completed in: 248.5 seconds
+"
+"0","write_parquet(lat_longs_mapbox,paste0(localbig,""\\data\\lat_longs_mapbox.parquet""))"
+"0",""
+"0",""

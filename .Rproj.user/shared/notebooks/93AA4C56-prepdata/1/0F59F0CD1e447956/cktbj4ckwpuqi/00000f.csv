@@ -1,0 +1,66 @@
+"0","library(plotly)"
+"2","Warning:"
+"2"," package ‘plotly’ was built under R version 4.4.3
+"
+"2","Registered S3 method overwritten by 'data.table':
+  method           from
+  print.data.table     
+"
+"2","
+Attaching package: ‘plotly’
+
+"
+"2","The following object is masked from ‘package:ggplot2’:
+
+    last_plot
+
+"
+"2","The following object is masked from ‘package:arrow’:
+
+    schema
+
+"
+"2","The following object is masked from ‘package:stats’:
+
+    filter
+
+"
+"2","The following object is masked from ‘package:graphics’:
+
+    layout
+
+"
+"0","library(ggplot2)"
+"0","library(maps)"
+"0",""
+"0","# Create ggplot"
+"0","world_map <- map_data(""world"")"
+"0",""
+"0","p <- ggplot() +"
+"0","  geom_polygon(data = world_map, "
+"0","               aes(x = long, y = lat, group = group),"
+"0","               fill = ""lightgray"", "
+"0","               color = ""white"", "
+"0","               linewidth = 0.2) +"
+"0","  geom_point(data = capital_coords,"
+"0","             aes(x = longitude, y = latitude, "
+"0","                 text = paste0(""Capital: "", capital, ""\n"","
+"0","                              ""Country: "", iso2, ""\n"","
+"0","                              ""Coordinates: "", round(latitude, 2), "", "", round(longitude, 2))),"
+"0","             color = ""red"", "
+"0","             size = 2, "
+"0","             alpha = 0.7) +"
+"0","  theme_minimal() +"
+"0","  labs(title = ""World Capital Cities - Interactive"","
+"0","       x = ""Longitude"","
+"0","       y = ""Latitude"")"
+"2","Warning in geom_point(data = capital_coords, aes(x = longitude, y = latitude,  :"
+"2","
+ "
+"2"," [38;5;255mIgnoring unknown aesthetics: [32mtext[38;5;255m[39m
+"
+"0","# Convert to interactive plotly"
+"0","ggplotly(p, tooltip = ""text"") %>%"
+"0","  layout("
+"0","    hoverlabel = list(bgcolor = ""white"", font = list(size = 12))"
+"0","  )"
