@@ -358,6 +358,17 @@ lat_longs_mapbox= lat_longs_mapbox %>% mutate(person_ctry_code=gsub("\\s+", "", 
 
 test=lat_longs_mapbox %>% filter(person_ctry_code=="TW")
 
+
+
+lat_longs_mapbox=lat_longs_mapbox %>% filter(!is.na(latitude) ) %>% 
+                                      filter(!is.na(person_ctry_code)) %>% 
+                                      filter(person_ctry_code!="") %>% 
+                                      filter(!(person_ctry_code!=inferrediso2 & !is.na(inferrediso2) ))
+
+
+
+lat_longs_bycountry=lat_longs_mapbox %>% group_by(person_ctry_code,longitude,latitude) %>% summarise(innos=n())
+
 ```
 
 
@@ -502,42 +513,37 @@ cat("Total countries:", nrow(capital_coords), "\n")
 
 
 ```{r}
-# Load required libraries
+library(plotly)
 library(ggplot2)
 library(maps)
 
-# Create the capital coordinates dataframe (use the code from before)
-# ... [capital_coords dataframe from previous code] ...
-
-# Get world map data
+# Create ggplot
 world_map <- map_data("world")
 
-# Create the plot
-ggplot() +
-  # Draw the world map
+p <- ggplot() +
   geom_polygon(data = world_map, 
                aes(x = long, y = lat, group = group),
                fill = "lightgray", 
                color = "white", 
                linewidth = 0.2) +
-  # Add capital cities as points
   geom_point(data = capital_coords,
-             aes(x = longitude, y = latitude),
+             aes(x = longitude, y = latitude, 
+                 text = paste0("Capital: ", capital, "\n",
+                              "Country: ", iso2, "\n",
+                              "Coordinates: ", round(latitude, 2), ", ", round(longitude, 2))),
              color = "red", 
-             size = 1.5, 
+             size = 2, 
              alpha = 0.7) +
-  # Styling
   theme_minimal() +
-  labs(title = "World Capital Cities",
-       subtitle = paste("Showing", nrow(capital_coords), "capital cities"),
+  labs(title = "World Capital Cities - Interactive",
        x = "Longitude",
-       y = "Latitude") +
-  theme(panel.background = element_rect(fill = "aliceblue"),
-        plot.title = element_text(face = "bold", size = 16))
+       y = "Latitude")
+
+# Convert to interactive plotly
+ggplotly(p, tooltip = "text") %>%
+  layout(
+    hoverlabel = list(bgcolor = "white", font = list(size = 12))
+  )
 
 ```
-
-
-
-
 
