@@ -547,3 +547,131 @@ ggplotly(p, tooltip = "text") %>%
 
 ```
 
+
+
+## now infer long and lats from either the succesful matches or if there is none...let's just use the capital location...
+
+
+```{r}
+  library(bigrquery)
+  library(DBI)
+  
+  # Set your project ID
+  project_id <- "patbis"
+  
+  # Option 1: Direct table download
+  # Specify dataset and table name
+  dataset <- "inglobe"
+  table <- "person_address_extract"
+  
+
+  # Upload - this creates or replaces the table
+bq_table_upload(
+  x = bq_table(project_id, dataset, "lat_longs_mapbox"),
+  values = lat_longs_mapbox,
+  #fields = df,  # Optional: specify schema
+  write_disposition = "WRITE_TRUNCATE"  # Replaces existing table
+)
+
+
+
+capital_coords=capital_coords %>% mutate(person_ctry_code=iso2) %>% select(person_ctry_code,latitude,longitude)
+bq_table_upload(
+  x = bq_table(project_id, dataset, "capital_coords"),
+  values = capital_coords,
+  #fields = df,  # Optional: specify schema
+  write_disposition = "WRITE_TRUNCATE"  # Replaces existing table
+)
+
+  
+
+```
+
+
+
+
+
+
+```{r}
+
+
+
+anti=df %>% anti_join(lat_longs_mapbox) %>% select(person_id,person_ctry_code) 
+anti=anti %>% filter(!is.na(person_ctry_code) & gsub("\\s+", "", person_ctry_code)!="")
+
+
+
+
+
+lat_long=lat_longs_mapbox %>% select(longitude,latitude,person_ctry_code) %>% bind_rows(capital_coords) %>% group_by(person_ctry_code) %>% 
+  mutate(rr=runif(1:n())) %>% arrange(person_ctry_code, rr) %>% mutate(nn=1:n()) %>% filter(nn<3) %>%  # Let's restrict to 5 places per country...
+  select(longitude,latitude,person_ctry_code)
+
+
+anti=anti %>% left_join(lat_long,by="person_ctry_code") %>%
+  group_by(person_id) %>% mutate(rr=runif(1:n())) %>% arrange(person_id, rr) %>% mutate(nn=1:n()) %>% filter(nn==1)
+
+
+anti=anti %>% select(-nn,-rr)
+
+dfnew=anti %>% bind_rows(lat_longs_mapbox) %>% select(person_id, person_ctry_code,longitude,latitude)
+
+
+
+write_parquet(dfnew,paste0(localbig,"\\data\\dfnew.parquet"))
+
+
+
+
+```
+
+
+```{r}
+
+library(leaflet)
+library(dplyr)
+library(arrow)
+dfnew=read_parquet(paste0(localbig,"\\data\\dfnew.parquet"))
+
+
+#df_sample <- dfnew %>% slice_sample(n = 10000)
+
+
+
+library(data.table)
+dfnew <- as.data.table(dfnew)
+dt_sample <- dfnew[sample(.N, 100000)]
+
+# With clustering (much better for 100k points!)
+leaflet(dt_sample) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    lng = ~longitude,
+    lat = ~latitude,
+    radius = 3,
+    fillOpacity = 0.5,
+    stroke = FALSE,
+    clusterOptions = markerClusterOptions()
+  )
+
+
+
+
+
+```
+
+
+
+
+```{r,eval=FALSE}
+bq_table_upload(
+  x = bq_table(project_id, dataset, "dfnew"),
+  values = dfnew,
+  #fields = df,  # Optional: specify schema
+  write_disposition = "WRITE_TRUNCATE"  # Replaces existing table
+)
+```
+  
+
+
+```
