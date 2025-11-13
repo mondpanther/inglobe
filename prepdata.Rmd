@@ -1,6 +1,11 @@
-# Prep data..
+---
+title: "Prepare various bits of data"
+output: html_notebook
+---
 
-
+This notebook prepares the 
+- locational data for patents
+- person/firm level identifiers
 
 ```{r}
 
@@ -59,7 +64,6 @@ The main purpose of the exercise is now to get map points that are reasonable wi
 
 ```{r}
 personfile=paste0(localbig,"\\data\\person_address.parquet")
-
 if (!file.exists(personfile)) {
   library(bigrquery)
   library(DBI)
@@ -81,8 +85,242 @@ if (!file.exists(personfile)) {
   library(arrow)
   write_parquet(df,personfile)
 }
+```
+
+
+
+## Get person data
+
+```{r}
+## Inventors
+inventorfile=paste0(localbig,"\\data\\inventors.parquet")
+if (!file.exists(inventorfile)) {
+  library(bigrquery)
+  library(DBI)
+  
+  # Set your project ID
+  project_id <- "patbis"
+  
+  # Option 1: Direct table download
+  # Specify dataset and table name
+  dataset <- "inglobe"
+  table <- "inventors"
+  
+  # Download the entire table
+  inventors <- bq_table_download(
+    bq_table(project_id, dataset, table)
+  )
+  
+  
+  library(arrow)
+  write_parquet(inventors,inventorfile)
+}
+
+
+
+
+# Set your project ID
+project_id <- "patbis"
+dataset <- "inglobe"
+
+# Define list of tables to download
+tables_to_download <- c("inventors", "holders",  "inventor_countries", "holder_countries")
+#tables_to_download <- c( "inventor_countries", "holder_countries")
+# Loop through each table
+for (table in tables_to_download) {
+  # Create local filename
+  local_file <- paste0(localbig, "\\data\\", table, ".parquet")
+  
+  # Check if file already exists
+  if (!file.exists(local_file)) {
+    message("Downloading ", table, "...")
+    
+    # Download the table
+    table_data <- bq_table_download(
+      bq_table(project_id, dataset, table)
+    )
+    
+    # Save as parquet
+    write_parquet(table_data, local_file)
+    message("Saved to ", local_file)
+  } else {
+    message("File already exists: ", local_file)
+  }
+}
+
 
 ```
+
+### a little check.... are high value patents MNE ones?
+
+```{r}
+
+# Define list of tables to read
+tables_to_read <- c( "inventor_countries", "holder_countries")
+
+# Loop through each table and read into a dataframe
+for (table in tables_to_read) {
+  # Create filename
+  local_file <- paste0(localbig, "\\data\\", table, ".parquet")
+  
+  # Read parquet file and assign to variable with table name
+  if (file.exists(local_file)) {
+    assign(table, read_parquet(local_file))
+    message("Loaded ", table, " (", nrow(get(table)), " rows)")
+  } else {
+    warning("File not found: ", local_file)
+  }
+}
+
+
+source("prepdatahelper.r")
+
+
+holderORinventor=holder_countries %>% mutate(type="holder") %>%
+  bind_rows(inventor_countries %>% mutate(type="inventor")) %>% rename(iso2=person_ctry_code) %>% 
+  inner_join(country_income)
+
+hicinno=holderORinventor %>% group_by(docdb_family_id) %>%
+  summarize(hicinno=max(HIC),
+            hicinnoUS=max(iso2=="US"),
+            hicinnoEurope=max(iso2 %in% hiceurope),
+            multi=max(iso2)!=min(iso2),
+            hicinventor=max(HIC*(type=="inventor")),
+            hicholder=max(HIC*(type=="holder"))
+            )
+
+
+
+library(collapse)
+
+hicinno <- holderORinventor %>%
+  fgroup_by(docdb_family_id) %>%
+  fsummarise(
+    hicinno = fmax(HIC),
+    hicinnoUS = fmax(iso2 == "US"),
+    hicinnoEurope = fmax(iso2 %in% hiceurope),
+    multi = fndistinct(iso2) > 1,
+    hicinventor = fmax(HIC * (type == "inventor")),
+    hicholder = fmax(HIC * (type == "holder"))
+  )
+
+
+
+
+countrymap <- read_parquet("../iseapp/countrymap.parquet")
+#for (ff in files) {
+#  patchar_countrymap <- patchar_countrymap %>% left_join(read_parquet(ff))
+#}
+
+techmap <- read_parquet("../iseapp/techmap.parquet")
+test=techmap %>% distinct(technology)
+greenid = techmap %>% filter(technology=="Any Green")
+
+
+istraxglobal= read_parquet("../iseapp/istraxes/istrax_global.parquet")
+istraxemdeexcn= read_parquet("../iseapp/istraxes/istrax_emdeexcn.parquet")
+istraxnational= read_parquet("../iseapp/istraxes/istrax_nationalkey_2009_2018.parquet")
+
+#bigX=countrymap %>% inner_join(hicinno) %>% inner_join(istraxglobal)
+
+
+bigX=countrymap %>% inner_join(hicinno) %>% 
+   inner_join(istraxglobal) %>%
+   inner_join(istraxemdeexcn) %>% 
+   inner_join(istraxnational) %>% 
+   rename(iso2=ctry_code) %>% 
+   inner_join(country_income)%>% mutate(CNid=iso2=="CN") %>% left_join(greenid) %>% 
+   mutate(anygreen=!is.na(technology))
+
+
+library(fixest)
+
+
+
+feols(istrax_global ~ hicinno+hicinnoUS+hicinnoEurope+multi,
+      bigX %>% filter(HIC==0&CNid==0))
+
+feols(istrax_EMDEexCN ~ hicinno+hicinnoUS+hicinnoEurope+multi,
+      bigX %>% filter(HIC==0&CNid==0))
+
+feols(istrax_nationalkey_2009_2018 ~ hicinno+hicinnoUS+hicinnoEurope+multi,
+      bigX %>% filter(HIC==0&CNid==0))
+
+############ now focus on green only
+
+feols(istrax_global ~ hicinno+hicinnoUS+hicinnoEurope+multi,
+      bigX %>% filter(HIC==0&CNid==0&anygreen==T))
+
+feols(istrax_EMDEexCN ~ hicinno+hicinnoUS+hicinnoEurope+multi,
+      bigX %>% filter(HIC==0&CNid==0&anygreen==T))
+
+feols(istrax_nationalkey_2009_2018 ~ hicinno+hicinnoUS+hicinnoEurope+multi,
+      bigX %>% filter(HIC==0&CNid==0&anygreen==T))
+
+############## now with interaction
+
+feols(istrax_global ~ hicinno*anygreen+
+                      hicinnoUS*anygreen+
+                      hicinnoEurope*anygreen+
+                      multi*anygreen,
+      bigX %>% filter(HIC==0&CNid==0))
+
+
+
+feols(istrax_EMDEexCN ~ hicinno*anygreen+
+                      hicinnoUS*anygreen+
+                      hicinnoEurope*anygreen+
+                      multi*anygreen,
+      bigX %>% filter(HIC==0&CNid==0))
+
+########## simpler; i.e. drop europe us
+
+feols(istrax_global ~ hicinno*anygreen,
+                      
+      bigX %>% filter(HIC==0&CNid==0))
+
+
+
+feols(istrax_EMDEexCN ~ hicinno*anygreen,
+                      
+      bigX %>% filter(HIC==0&CNid==0))
+
+
+
+
+
+feols(istrax_EMDEexCN ~ anygreen,
+                      
+      bigX %>% filter(HIC==0&CNid==0))
+
+
+feols(istrax_global ~ anygreen,
+                      
+      bigX %>% filter(HIC==0&CNid==0))
+
+
+
+#####################################
+
+bigXaa=bigX %>% filter(HIC==0 & CNid==0) %>% group_by(hicinno,multi) %>% 
+  summarize(istraxmean=mean(istrax_global),
+            istraxp90=quantile(istrax_global, 0.90, na.rm = TRUE),
+            n()) 
+
+
+
+bigXa=bigX %>% group_by(HIC,hicinno,multi,CNid) %>% 
+  summarize(istraxmean=mean(istrax_global),
+            istraxp90=quantile(istrax_global, 0.90, na.rm = TRUE),
+            n()) %>% filter(!(HIC==1&hicinno==0))
+
+
+
+
+
+
+```
+
 
 
 ## find locations...
