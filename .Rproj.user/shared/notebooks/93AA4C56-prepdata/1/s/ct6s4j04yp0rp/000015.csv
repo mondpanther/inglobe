@@ -1,9 +1,0 @@
-"0","capitalcities=read.csv(paste0(localbig,""\\data\\countries_codes_coordinates.csv""))
-"
-"2","Warning in file(file, ""rt"") :"
-"2","
- "
-"2"," cannot open file 'C:\Users\rmartin7\OneDrive - Imperial College London\inglobe\data\countries_codes_coordinates.csv': No such file or directory
-"
-"2","Error in file(file, ""rt"") : cannot open the connection
-"
