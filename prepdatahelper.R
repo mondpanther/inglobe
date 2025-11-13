@@ -32,36 +32,47 @@ hiceurope=c(  "AT", "BE", "CH", "CY", "DE", "DK", "ES", "FI", "FR", "GB",
              # Eastern Europe
              "CZ", "EE", "LT", "LV", "PL", "SI", "SK")
 
-# Get all unique iso2 codes (you can adjust this list as needed)
-all_countries <- c(
-  "AD", "AE", "AF", "AG", "AI", "AL", "AM", "AO", "AQ", "AR", "AS", "AT",
-  "AU", "AW", "AX", "AZ", "BA", "BB", "BD", "BE", "BF", "BG", "BH", "BI",
-  "BJ", "BL", "BM", "BN", "BO", "BQ", "BR", "BS", "BT", "BV", "BW", "BY",
-  "BZ", "CA", "CC", "CD", "CF", "CG", "CH", "CI", "CK", "CL", "CM", "CN",
-  "CO", "CR", "CU", "CV", "CW", "CX", "CY", "CZ", "DE", "DJ", "DK", "DM",
-  "DO", "DZ", "EC", "EE", "EG", "EH", "ER", "ES", "ET", "FI", "FJ", "FK",
-  "FM", "FO", "FR", "GA", "GB", "GD", "GE", "GF", "GG", "GH", "GI", "GL",
-  "GM", "GN", "GP", "GQ", "GR", "GS", "GT", "GU", "GW", "GY", "HK", "HM",
-  "HN", "HR", "HT", "HU", "ID", "IE", "IL", "IM", "IN", "IO", "IQ", "IR",
-  "IS", "IT", "JE", "JM", "JO", "JP", "KE", "KG", "KH", "KI", "KM", "KN",
-  "KP", "KR", "KW", "KY", "KZ", "LA", "LB", "LC", "LI", "LK", "LR", "LS",
-  "LT", "LU", "LV", "LY", "MA", "MC", "MD", "ME", "MF", "MG", "MH", "MK",
-  "ML", "MM", "MN", "MO", "MP", "MQ", "MR", "MS", "MT", "MU", "MV", "MW",
-  "MX", "MY", "MZ", "NA", "NC", "NE", "NF", "NG", "NI", "NL", "NO", "NP",
-  "NR", "NU", "NZ", "OM", "PA", "PE", "PF", "PG", "PH", "PK", "PL", "PM",
-  "PN", "PR", "PS", "PT", "PW", "PY", "QA", "RE", "RO", "RS", "RU", "RW",
-  "SA", "SB", "SC", "SD", "SE", "SG", "SH", "SI", "SJ", "SK", "SL", "SM",
-  "SN", "SO", "SR", "SS", "ST", "SV", "SX", "SY", "SZ", "TC", "TD", "TF",
-  "TG", "TH", "TJ", "TK", "TL", "TM", "TN", "TO", "TR", "TT", "TV", "TW",
-  "TZ", "UA", "UG", "UM", "US", "UY", "UZ", "VA", "VC", "VE", "VG", "VI",
-  "VN", "VU", "WF", "WS", "YE", "YT", "ZA", "ZM", "ZW"
+
+################# from KEVCE
+all_countries <- sort(unique(na.omit(countrycode::codelist$iso2c)))
+lmics <- c("AF","AL","DZ","AO","AR","AM","AZ","BD","BJ","BO","BA","BW","BR","BG",
+           "BF","BI","KH","CM","CV","CF","TD","CL","CN","CO","KM","CG","CR","CI",
+           "CU","DJ","DM","DO","EC","EG","SV","GQ","ER","ET","FJ","GA","GM","GE",
+           "GH","GT","GN","GW","GY","HT","HN","IN","ID","IR","IQ","JM","JO","KZ",
+           "KE","KI","KP","KG","LA","LB","LS","LR","LY","MG","MW","MY","MV","ML",
+           "MR","MU","MX","MD","MN","ME","MA","MZ","MM","NA","NP","NI","NE","NG",
+           "MK","PK","PW","PA","PG","PY","PE","PH","RW","WS","ST","SN","RS","SC",
+           "SL","SB","SO","ZA","LK","SD","SR","SY","TJ","TZ","TH","TL","TG","TO",
+           "TN","TR","TM","TV","UG","UA","UZ","VU","VE","VN","YE","ZM","ZW")
+
+lmics_excl_china <- setdiff(lmics, "CN")
+eu_countries <- c("AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR",
+                  "HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK",
+                  "SI","ES","SE")
+hic <- setdiff(all_countries, lmics)
+
+
+
+hic=high_income_iso2 <- c(
+  "AD", "AG", "AU", "AT", "BS", "BH", "BB", "BE", "BN", "BG", "CA", "CL",
+  "CR", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "GY", "HU",
+  "IS", "IE", "IL", "IT", "JP", "KW", "LV", "LI", "LT", "LU", "MT", "MC",
+  "NR", "NL", "NZ", "NO", "OM", "PW", "PA", "PL", "PT", "QA", "RO", "RU",
+  "KN", "SM", "SA", "SC", "SG", "SK", "SI", "KR", "ES", "SE", "CH", "TT",
+  "AE", "GB", "US", "UY",
+  # Territories and non-UN members
+  "AS", "AW", "BM", "VG", "KY", "JE", "CW", "FO", "PF", "GI", "GL", "GU",
+  "HK", "IM", "MO", "NC", "MP", "PR", "MF", "SX", "TW", "TC", "VI"
 )
+
 
 # Create dataframe
 country_income <- data.frame(
   iso2 = all_countries,
-  HIC = as.integer(all_countries %in% hic_countries)
+  HIC = as.integer(all_countries %in% hic)
 )
+
+
 
 
 

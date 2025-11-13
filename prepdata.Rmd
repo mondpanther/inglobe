@@ -180,16 +180,6 @@ holderORinventor=holder_countries %>% mutate(type="holder") %>%
   bind_rows(inventor_countries %>% mutate(type="inventor")) %>% rename(iso2=person_ctry_code) %>% 
   inner_join(country_income)
 
-hicinno=holderORinventor %>% group_by(docdb_family_id) %>%
-  summarize(hicinno=max(HIC),
-            hicinnoUS=max(iso2=="US"),
-            hicinnoEurope=max(iso2 %in% hiceurope),
-            multi=max(iso2)!=min(iso2),
-            hicinventor=max(HIC*(type=="inventor")),
-            hicholder=max(HIC*(type=="holder"))
-            )
-
-
 
 library(collapse)
 
@@ -214,7 +204,7 @@ countrymap <- read_parquet("../iseapp/countrymap.parquet")
 
 techmap <- read_parquet("../iseapp/techmap.parquet")
 test=techmap %>% distinct(technology)
-greenid = techmap %>% filter(technology=="Any Green")
+greenid = techmap %>% filter(technology=="Any Green") %>% distinct()
 
 
 istraxglobal= read_parquet("../iseapp/istraxes/istrax_global.parquet")
@@ -231,6 +221,16 @@ bigX=countrymap %>% inner_join(hicinno) %>%
    rename(iso2=ctry_code) %>% 
    inner_join(country_income)%>% mutate(CNid=iso2=="CN") %>% left_join(greenid) %>% 
    mutate(anygreen=!is.na(technology))
+
+
+bigX=countrymap %>% left_join(hicinno) %>% 
+   inner_join(istraxglobal) %>%
+   inner_join(istraxemdeexcn) %>% 
+   inner_join(istraxnational) %>% 
+   rename(iso2=ctry_code) %>% 
+   inner_join(country_income)%>% mutate(CNid=iso2=="CN") %>% left_join(greenid) %>% 
+   mutate(anygreen=!is.na(technology))
+
 
 
 library(fixest)
@@ -275,28 +275,148 @@ feols(istrax_EMDEexCN ~ hicinno*anygreen+
 
 ########## simpler; i.e. drop europe us
 
-feols(istrax_global ~ hicinno*anygreen,
+feols(istrax_global ~ hicinno*anygreen+multi*anygreen,
                       
       bigX %>% filter(HIC==0&CNid==0))
 
 
 
-feols(istrax_EMDEexCN ~ hicinno*anygreen,
+feols(istrax_EMDEexCN ~ hicinno*anygreen+multi*anygreen,
                       
       bigX %>% filter(HIC==0&CNid==0))
+```
+
+
+### pie charts
+```{r}
+
+
+library(plotly)
+library(dplyr)
+
+# Create summary
+collab_summary <- bigX %>%  filter(HIC==0&CNid==0 & !(hicinno == 1 & multi == 0)) %>% 
+  count(hicinno, multi) %>%
+  mutate(category = case_when(
+    hicinno == 1 & multi == 1 ~ "HIC & International",
+    hicinno == 1 & multi == 0 ~ "HIC Only",
+    hicinno == 0 & multi == 1 ~ "International Only",
+    hicinno == 0 & multi == 0 ~ "No Collaboration"
+  ))
+
+# Create interactive pie chart
+plot_ly(collab_summary, 
+        labels = ~category, 
+        values = ~n, 
+        type = 'pie',
+        textinfo = 'label+percent+value',
+        hoverinfo = 'text',
+        text = ~paste('Count:', n)) %>%
+  layout(title = 'Distribution of Collaboration Types')
+
+```
+
+### donut
+
+```{r}
+
+library(ggplot2)
+library(dplyr)
+
+# Create summary
+collab_counts <- bigX %>%
+  filter(HIC==0&CNid==0 & !(hicinno == 1 & multi == 0)) %>% 
+  count(hicinno, multi) %>%
+  
+  mutate(category = case_when(
+    hicinno == 1 & multi == 1 ~ "HIC & International",
+    hicinno == 1 & multi == 0 ~ "HIC Only",
+    hicinno == 0 & multi == 1 ~ "International Only",
+    hicinno == 0 & multi == 0 ~ "No Collaboration"
+  ),
+  percentage = round(n / sum(n) * 100, 1))
+
+# Create donut chart
+ggplot(collab_counts, aes(x = 2, y = n, fill = category)) +
+  geom_col(color = "white", linewidth = 1) +
+  coord_polar(theta = "y") +
+  xlim(c(0.5, 2.5)) +
+  geom_text(aes(label = paste0(n, "\n(", percentage, "%)")),
+            position = position_stack(vjust = 0.5),
+            size = 3.5, fontface = "bold") +
+  scale_fill_brewer(palette = "Set2", name = "Collaboration Type") +
+  labs(title = "Distribution of Collaboration Types") +
+  theme_void() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+
+
+```
+
+### simple regressions
+
+```{r}
+############## no green
 
 
 
+model=feols(istrax_global*100 ~ hicinno+multi,
+        
+      bigX %>% filter(HIC==0&CNid==0))
+print(model)
+
+library(ggplot2)
+library(broom)
+
+# Extract and filter for specific variables
+coef_data <- tidy(model, conf.int = TRUE) %>%
+  filter(term %in% c("hicinno", "multiTRUE")) %>%
+  mutate(term = factor(term, levels = c("hicinno", "multiTRUE"),
+                       labels = c("HIC Collaboration", "International Collaboration")))
+
+# Create plot
+ggplot(coef_data, aes(x = term, y = estimate)) +
+  geom_col(aes(fill = term), alpha = 0.8) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                width = 0.25, linewidth = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray30") +
+  scale_fill_manual(values = c("#2E86AB", "#A23B72")) +
+  labs(title = "Effect of Collaboration Type on Outcome",
+       x = NULL,
+       y = "External Value post per $100 invested") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        text = element_text(size = 13),
+        axis.text = element_text(size = 12))
 
 
-feols(istrax_EMDEexCN ~ anygreen,
-                      
+
+##### onlly emede ex cn
+
+model=feols(istrax_EMDEexCN*100 ~ hicinno+multi,
       bigX %>% filter(HIC==0&CNid==0))
 
+print(model)
+# Extract and filter for specific variables
+coef_data <- tidy(model, conf.int = TRUE) %>%
+  filter(term %in% c("hicinno", "multiTRUE")) %>%
+  mutate(term = factor(term, levels = c("hicinno", "multiTRUE"),
+                       labels = c("HIC Collaboration", "International Collaboration")))
 
-feols(istrax_global ~ anygreen,
-                      
-      bigX %>% filter(HIC==0&CNid==0))
+# Create plot
+ggplot(coef_data, aes(x = term, y = estimate)) +
+  geom_col(aes(fill = term), alpha = 0.8) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
+                width = 0.25, linewidth = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray30") +
+  scale_fill_manual(values = c("#2E86AB", "#A23B72")) +
+  labs(title = "Effect of Collaboration Type on Outcome",
+       x = NULL,
+       y = "External Value post per $100 invested") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        text = element_text(size = 13),
+        axis.text = element_text(size = 12))
+
 
 
 
@@ -322,6 +442,88 @@ bigXa=bigX %>% group_by(HIC,hicinno,multi,CNid) %>%
 ```
 
 
+
+```{r}
+
+plot_collab_returns <- function(data = bigX, 
+                                var, 
+                                filter_HIC = TRUE,
+                                filter_CNid = TRUE,
+                                exclude_HIC_only = TRUE,
+                                title = "Return by Collaboration Type",
+                                xlab = "Spillover return per $100 invested",
+                                multiply_by = 100,
+                                palette = "Set1",
+                                text_size = 3.5,
+                                label_size = 4) {
+  
+  var_enquo <- enquo(var)
+  
+  # Apply filters conditionally
+  filtered_data <- data
+  if (filter_HIC) filtered_data <- filtered_data %>% filter(HIC == 0)
+  if (filter_CNid) filtered_data <- filtered_data %>% filter(CNid == 0)
+  if (exclude_HIC_only) filtered_data <- filtered_data %>% filter(!(hicinno == 1 & multi == 0))
+  
+  # Prepare summary data
+  summary_data <- filtered_data %>%
+    mutate(collab_type = case_when(
+      hicinno == 1 & multi == 1 ~ "HIC & International",
+      hicinno == 1 & multi == 0 ~ "HIC Only",
+      hicinno == 0 & multi == 1 ~ "International Only",
+      hicinno == 0 & multi == 0 ~ "No Collaboration"
+    )) %>%
+    group_by(collab_type) %>%
+    summarise(
+      avg_value = mean(!!var_enquo * multiply_by, na.rm = TRUE),
+      n = n(),
+      nn = log(n),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      share = n / sum(n),
+      log_share = nn / sum(nn),
+      log_share_scaled = (log_share - min(log_share)) * 50,
+      y_pos = row_number(),
+      ymin = y_pos - log_share/2,
+      ymax = y_pos + log_share/2
+    ) %>%
+    arrange(desc(avg_value))
+  
+  # Create plot
+  ggplot(summary_data) +
+    geom_rect(aes(xmin = 0, xmax = avg_value, ymin = ymin, ymax = ymax, fill = collab_type),
+              alpha = 0.8, color = "white", linewidth = 1) +
+    geom_text(aes(x = avg_value + max(avg_value)*0.02, y = y_pos, 
+                  label = paste0(round(avg_value, 2))),
+              hjust = 0, size = label_size, fontface = "bold", color = "black") +
+    geom_text(aes(x = 0, y = y_pos, 
+                  label = paste0(collab_type, "\n(n=", scales::comma(n), ", ", 
+                                round(share*100, 1), "%)")),
+              hjust = 1.05, size = text_size, fontface = "bold", color = "black") +
+    scale_fill_brewer(palette = palette) +
+    labs(title = title,
+         subtitle = "Bar width proportional to log(share) of observations",
+         x = xlab,
+         y = NULL) +
+    theme_minimal() +
+    theme(
+      legend.position = "none",
+      panel.grid.major.y = element_blank(),
+      plot.title = element_text(face = "bold", size = 14),
+      axis.text.y = element_blank(),
+      plot.margin = margin(10, 10, 10, 100)
+    ) +
+    coord_cartesian(clip = "off")
+}
+
+# Usage:
+plot_collab_returns(bigX, istrax_global)
+plot_collab_returns(bigX, istrax_EMDEexCN)
+
+
+
+```
 
 ## find locations...
 
@@ -911,5 +1113,3 @@ bq_table_upload(
 ```
   
 
-
-```
