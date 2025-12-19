@@ -15,10 +15,15 @@ library(dplyr)
 
 
 
+
 ```{r}
+
+
+
 if (Sys.info()["nodename"] == "PCACL-9RVSQ74") {
   datad="C:\\Users\\rmartin7\\OneDrive - WBG\\projects\\PRINZGlobal\\imperial_college_visualization\\01_data"
   localbig="C:\\Users\\rmartin7\\OneDrive - Imperial College London\\inglobe"
+  localbigwb="C:\\Users\\rmartin7\\OneDrive - WBG\\projects\\inglobe"
 }
 
 ```
@@ -26,22 +31,14 @@ if (Sys.info()["nodename"] == "PCACL-9RVSQ74") {
 
 # Load data
 
-```{r}
+```{r,eval=FALSE}
 
 
 
-
-#url="../../data/patent_data/patbis2021/data/fromWATSON/innos_ctry_indicators.dsv"
-
-
-#url="../../data/patent_data/patbis2021/data/fromWATSON/innos_istraxfield_nationalkey_2009_2018.dsv"
-
-#countrymap <- read_tsv(url)
 
 cites=read_tsv(paste0(datad,"\\citenet_noself"))
 
 
-#capitalcities=read.csv(paste0(localbig,"\\data\\countries_codes_and_coordinates.csv"))
 
 
 ```
@@ -85,8 +82,79 @@ if (!file.exists(personfile)) {
   library(arrow)
   write_parquet(df,personfile)
 }
+
+df=read_parquet(personfile)
+
 ```
 
+
+
+### get docdb and application id
+
+```{r}
+
+library(fst)
+
+filen=paste0(localbigwb,"\\data\\appln_docdb.fst")
+if (!file.exists(filen)) {
+  library(bigrquery)
+  library(DBI)
+  
+  # Set your project ID
+  project_id <- "patbis"
+  
+  # Option 1: Direct table download
+  # Specify dataset and table name
+  dataset <- "fromPATSTAT2021"
+  table <- "tls201_appln"
+  
+  # Download the entire table
+  #df <- bq_table_download(
+  #  bq_table(project_id, dataset, table),
+  #  selected_fields = c("appln_id", "appln_filing_year", "docdb_familily_id")
+  #)
+  
+  
+  
+  # Use SQL to select specific columns
+  sql <- "
+    SELECT 
+      appln_id, 
+      appln_filing_year, 
+      docdb_family_id,
+      appln_nr,
+      appln_auth,
+    FROM `patbis.fromPATSTAT2021.tls201_appln`
+    WHERE appln_filing_year>=2009
+  "
+  
+  # Run query and download results
+  tb <- bq_project_query(project_id, sql)
+  df <- bq_table_download(tb)
+  
+  df=df %>% distinct()
+  
+  library(fst)
+  write_fst(df,filen,compress=100)
+}
+
+
+
+#### let's create a file with priority pats....
+  library(fst)
+  df=read_fst(filen)
+  library(data.table)
+  # Convert to data.table if not already
+  setDT(df)
+  # Method A: Using .SD
+  df <- df[order(docdb_family_id, appln_filing_year), .SD[1], by = docdb_family_id]
+  
+  
+  ISEAPP_PATH_LOCAL="C:/Users/rmartin7/OneDrive - WBG/Apps/iseapp"
+  write_fst(df,paste0(ISEAPP_PATH_LOCAL,"first_appli.fst"),compress=100)
+  
+
+```
 
 
 ## Get person data
@@ -119,15 +187,19 @@ if (!file.exists(inventorfile)) {
 
 
 
+
+
+
 # Set your project ID
 project_id <- "patbis"
 dataset <- "inglobe"
 
 # Define list of tables to download
-tables_to_download <- c("inventors", "holders",  "inventor_countries", "holder_countries")
+tables_to_download <- c( "holders","inventors",  "inventor_countries", "holder_countries")
 #tables_to_download <- c( "inventor_countries", "holder_countries")
 # Loop through each table
 for (table in tables_to_download) {
+  #table="holders"
   # Create local filename
   local_file <- paste0(localbig, "\\data\\", table, ".parquet")
   
@@ -151,12 +223,14 @@ for (table in tables_to_download) {
 
 ```
 
+
+
 ### a little check.... are high value patents MNE ones?
 
 ```{r}
-
+library(arrow)
 # Define list of tables to read
-tables_to_read <- c( "inventor_countries", "holder_countries")
+tables_to_read <- c("inventors","holders", "inventor_countries", "holder_countries")
 
 # Loop through each table and read into a dataframe
 for (table in tables_to_read) {
@@ -177,7 +251,8 @@ source("prepdatahelper.r")
 
 
 holderORinventor=holder_countries %>% mutate(type="holder") %>%
-  bind_rows(inventor_countries %>% mutate(type="inventor")) %>% rename(iso2=person_ctry_code) %>% 
+  bind_rows(inventor_countries %>% mutate(type="inventor")) %>% 
+  rename(iso2=person_ctry_code) %>% 
   inner_join(country_income)
 
 
@@ -186,61 +261,157 @@ library(collapse)
 hicinno <- holderORinventor %>%
   fgroup_by(docdb_family_id) %>%
   fsummarise(
+    JPinno=fmax(iso2=="JP"),
+    ncountries = fndistinct(iso2), 
     hicinno = fmax(HIC),
     hicinnoUS = fmax(iso2 == "US"),
+    CNinno=fmax(iso2=="CN"),
     hicinnoEurope = fmax(iso2 %in% hiceurope),
     multi = fndistinct(iso2) > 1,
     hicinventor = fmax(HIC * (type == "inventor")),
-    hicholder = fmax(HIC * (type == "holder"))
+    hicholder = fmax(HIC   * (type == "holder"))
   )
 
+hicinno %>% filter(ncountries==1
+                   ) %>% nrow()
 
-
-
-countrymap <- read_parquet("../iseapp/countrymap.parquet")
+getwd()
+library(fst)
+countrymap <- read_fst("../iseapp/countrymap.fst")
 #for (ff in files) {
 #  patchar_countrymap <- patchar_countrymap %>% left_join(read_parquet(ff))
 #}
 
-techmap <- read_parquet("../iseapp/techmap.parquet")
+
+techmap <- read_fst("../iseapp/techmap.fst")
 test=techmap %>% distinct(technology)
-greenid = techmap %>% filter(technology=="Any Green") %>% distinct()
+greenid = techmap   %>% filter(technology=="Any Green technology") %>% distinct() %>% 
+  select(-technology) %>% mutate(greenid=1)
+
+batteryid = techmap %>% filter(technology=="Green ICT") %>% distinct() %>% 
+  select(-technology) %>% mutate(greenictid=1)
+
+greenictid=techmap %>% filter(technology=="Any battery technology") %>% distinct() %>% 
+  select(-technology) %>% mutate(batteryid=1)
 
 
-istraxglobal= read_parquet("../iseapp/istraxes/istrax_global.parquet")
-istraxemdeexcn= read_parquet("../iseapp/istraxes/istrax_emdeexcn.parquet")
-istraxnational= read_parquet("../iseapp/istraxes/istrax_nationalkey_2009_2018.parquet")
 
+istraxglobal= read_fst("../iseapp/istraxes/istrax_global.fst")
+istraxemdeexcn= read_fst("../iseapp/istraxes/istrax_emdenocn.fst")
+istraxnational= read_fst("../iseapp/istraxes/istrax_nationalkey_2009_2018.fst")
+evglobal=read_fst("../iseapp/istraxes/ev_global.fst")
 #bigX=countrymap %>% inner_join(hicinno) %>% inner_join(istraxglobal)
 
 
-bigX=countrymap %>% inner_join(hicinno) %>% 
-   inner_join(istraxglobal) %>%
-   inner_join(istraxemdeexcn) %>% 
-   inner_join(istraxnational) %>% 
-   rename(iso2=ctry_code) %>% 
-   inner_join(country_income)%>% mutate(CNid=iso2=="CN") %>% left_join(greenid) %>% 
-   mutate(anygreen=!is.na(technology))
+#bigX=countrymap %>% inner_join(hicinno) %>% 
+#   inner_join(istraxglobal) %>%
+#   #inner_join(istraxemdeexcn) %>% 
+#   inner_join(evglobal) %>% 
+#   inner_join(istraxnational) %>% 
+#   rename(iso2=ctry_code) %>% 
+#   inner_join(country_income)%>% mutate(CNid=iso2=="CN") %>% left_join(greenid) %>% 
+   #mutate(anygreen=!is.na(technology))
 
 
 bigX=countrymap %>% left_join(hicinno) %>% 
    inner_join(istraxglobal) %>%
    inner_join(istraxemdeexcn) %>% 
-   inner_join(istraxnational) %>% 
+   inner_join(istraxnational) %>%
+   inner_join(evglobal) %>% 
    rename(iso2=ctry_code) %>% 
-   inner_join(country_income)%>% mutate(CNid=iso2=="CN") %>% left_join(greenid) %>% 
-   mutate(anygreen=!is.na(technology))
+   inner_join(country_income)%>% mutate(CNid=iso2=="CN") %>% 
+   left_join(greenid) %>% 
+   left_join(batteryid) %>% left_join(greenictid)
 
 
+bigX=bigX %>%   mutate(across(c(batteryid, greenid, greenictid), ~replace_na(., 0)))
+bigX=bigX %>%   mutate(across(c(ncountries), ~replace_na(., 1)))
 
+bigX=bigX %>%   mutate(across(c(multi), ~replace_na(., FALSE)))
+bigX=bigX %>%   mutate(across(c(JPinno,
+                                starts_with("hicinno"),
+                                CNinno,hicinventor,hicholder), ~replace_na(., 0)))
+
+
+bigX=bigX %>% rename(istrax_nat=istrax_nationalkey_2009_2018)
+
+bigX %>% filter(is.na(hicinno)) %>% nrow()
+head(hicinno)
+head(bigX)
+```
+
+
+## now do regressions
+```{r}
 library(fixest)
-
-
-
 feols(istrax_global ~ hicinno+hicinnoUS+hicinnoEurope+multi,
+      bigX %>% filter(CNid==1))
+nrow(bigX %>% filter(CNid==1))
+mean(bigX %>% filter(CNid==1) %>% pull(ev_global))
+mean(bigX %>% filter(HIC==1) %>% pull(ev_global))
+
+
+feols(istrax_global ~ hicinno+hicinnoUS+hicinnoEurope+multi+CNinno+JPinno+ncountries,
       bigX %>% filter(HIC==0&CNid==0))
 
-feols(istrax_EMDEexCN ~ hicinno+hicinnoUS+hicinnoEurope+multi,
+
+
+
+feols(istrax_global ~ ncountries+hicinno,
+      bigX %>% filter(HIC==0&CNid==0))
+
+
+
+feols(istrax_nationalkey_2009_2018 ~ ncountries+hicinno,
+      bigX %>% filter(HIC==0&CNid==0))
+
+```
+
+
+### Accounting for the battery return gapss
+```{r}
+
+
+feols(istrax_global ~ batteryid  + greenictid
+    
+     , bigX %>% filter(HIC==0&CNid==0&iso2!="VN"))
+```
+
+```{r}
+bigX=bigX %>% mutate(VNid=iso2=="VN")
+
+bigX=bigX %>% mutate(VNid=iso2=="VN")
+feols(istrax_global ~0+ batteryid+batteryid:VNid  + greenictid+greenictid:VNid
+      
+     , bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
+
+
+
+feols(istrax_global ~ 0+batteryid+ batteryid:VNid +greenictid+greenictid:VNid
+    #  +ncountries+multi 
+     , bigX %>% filter(HIC==0&CNid==0))
+
+
+
+
+feols(istrax_global ~  VNid 
+    #  +ncountries+multi 
+     , bigX %>% filter((HIC==0&CNid==0) &batteryid==1))
+
+
+feols(istrax_global ~  VNid 
+      +ncountries+multi+hicinno 
+     , bigX %>% filter(HIC==0&CNid==0&batteryid==1))
+
+
+bigX %>% filter(HIC==0&CNid==0&iso2=="VN"&batteryid==1) %>% nrow()
+
+```
+
+
+```{r}
+
+feols(istrax_EMDENOCN ~ hicinno+hicinnoUS+hicinnoEurope+multi+CNinno,
       bigX %>% filter(HIC==0&CNid==0))
 
 feols(istrax_nationalkey_2009_2018 ~ hicinno+hicinnoUS+hicinnoEurope+multi,
@@ -248,8 +419,8 @@ feols(istrax_nationalkey_2009_2018 ~ hicinno+hicinnoUS+hicinnoEurope+multi,
 
 ############ now focus on green only
 
-feols(istrax_global ~ hicinno+hicinnoUS+hicinnoEurope+multi,
-      bigX %>% filter(HIC==0&CNid==0&anygreen==T))
+feols(istrax_global ~ hicinno+hicinnoUS+hicinnoEurope+ncountries+multi,
+      bigX %>% filter(HIC==0&CNid==0))
 
 feols(istrax_EMDEexCN ~ hicinno+hicinnoUS+hicinnoEurope+multi,
       bigX %>% filter(HIC==0&CNid==0&anygreen==T))
@@ -287,7 +458,51 @@ feols(istrax_EMDEexCN ~ hicinno*anygreen+multi*anygreen,
 ```
 
 
+
+### battery in Vietnam vs RoW...
+
+```{r}
+
+battery_classes=c("Battery Technology", "Lithium Extraction & Processing", 
+                  "Graphite & Carbon Materials", "Cathode Materials", "Anode Materials",
+                  "Electrolytes & Additives", "Separators", "Battery Cell Design & Assembly",
+                  "Battery Management Systems (BMS)", 
+                  "Electric Vehicles & Mobility", "Battery Recycling & Recovery")
+
+
+#batterymap=techmap %>% filter(technology %in% battery_classes) 
+
+bcmap=countrymap %>% rename(iso2=ctry_code) %>% inner_join(country_income) %>% 
+  inner_join(techmap %>% filter(technology %in% battery_classes) ) %>% 
+  filter(HIC==0 & iso2!="CN") %>% 
+  mutate(countrycats=ifelse(iso2 %in% c("CN","VN"),iso2,
+                                ifelse(HIC==0,"other LMIC","HIC")))
+
+abcmap=bcmap %>% group_by(technology, countrycats) %>% summarize(share=n()) %>%
+  group_by(countrycats) %>% 
+  mutate( share=share/ sum(share) )
+
+abcmap %>% 
+  ggplot(aes(x = technology, y = share, fill = countrycats)) + 
+  geom_col(position = "dodge") + 
+  scale_x_discrete(limits = rev) +
+  labs(
+    x = "Technology", 
+    y = "Share", 
+    fill = "Country Category"
+  ) + 
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+```
+
+
+
 ### pie charts
+
 ```{r}
 
 
@@ -295,7 +510,8 @@ library(plotly)
 library(dplyr)
 
 # Create summary
-collab_summary <- bigX %>%  filter(HIC==0&CNid==0 & !(hicinno == 1 & multi == 0)) %>% 
+
+collab_summary <- bigX %>%  filter(HIC==0&CNid==0 & !(hicinno == 1 & multi == 0 ) ) %>% 
   count(hicinno, multi) %>%
   mutate(category = case_when(
     hicinno == 1 & multi == 1 ~ "HIC & International",
@@ -316,6 +532,381 @@ plot_ly(collab_summary,
 
 ```
 
+
+#### Vietnam only...
+
+```{r}
+
+
+bigX %>% filter(HIC==0&CNid==0) %>% group_by(batteryid,greenictid) %>% 
+  summarize(across(c(ncountries,hicinno,istrax_global,istrax_EMDENOCN,istrax_nationalkey_2009_2018),mean))
+
+
+bigX %>% filter(HIC==0&CNid==0&iso2=="VN") %>% group_by(batteryid,greenictid) %>% 
+  summarize(across(c(ncountries,hicinno,istrax_global,istrax_EMDENOCN,istrax_nationalkey_2009_2018),mean))
+
+
+
+```
+
+
+## figure for the number of countries effect....
+```{r}
+  bigX %>% filter(HIC==0&CNid==0) %>% 
+      ggplot(aes(x=ncountries,y=istrax_global))+
+      geom_point()+geom_smooth(method="lm")
+
+
+
+```
+
+
+```{r}
+
+library(tidyverse)
+
+ncolab=function(outcome="istrax_global",bigX){
+# Create summary data
+summary_data <- bigX %>% 
+  filter(HIC==0 & CNid==0) %>%
+  mutate(ncountries=ifelse(ncountries>5,5,ncountries)) %>% 
+  group_by(ncountries) %>%
+  summarise(
+    mean_istrax = mean(!!sym(outcome), na.rm=TRUE),
+    n = n(),
+    sd = sd(!!sym(outcome), na.rm=TRUE),
+    se = sd / sqrt(n),
+    ci_lower = mean_istrax - 1.96 * se,  # 95% confidence interval
+    ci_upper = mean_istrax + 1.96 * se
+  ) %>%
+  mutate(width_prop = (n / max(n)))  # Proportional width (0 to 1)
+
+# Create plot
+summary_data %>%
+  ggplot(aes(x=ncountries, y=mean_istrax)) +
+  geom_col(aes(width=width_prop), fill="steelblue", alpha=0.7) +
+  geom_errorbar(aes(ymin=ci_lower, ymax=ci_upper), 
+                width=0.2, color="black") +
+  labs(x = "Number of Countries",
+       y = "Spillover Return in %",
+       title = "Mean Collaboration by Number of colaborating Countries") +
+  theme_minimal()
+}
+
+
+#bigX=bigX %>% rename(istrax_nat=istrax_nationalkey_2009_2018)
+ncolab(outcome="istrax_global",bigX=bigX)+
+  ggtitle("International collaborators and marginal returns to innovation")+
+  xlab("Number of collaborating countries")
+
+ncolab(outcome="istrax_global",bigX=bigX %>% filter(hicinnoUS==1))+
+  ggtitle("International collaborators and marginal returns to innovation")+
+  xlab("Number of collaborating countries")
+
+
+
+ncolab(outcome="istrax_nat",bigX=bigX)+
+  ggtitle("International collaborators and marginal natrional returns to innovation")+
+    xlab("Number of collaborating countries")
+
+
+
+
+
+```
+
+
+
+```{r}
+
+bigXfilter=bigX %>% 
+  filter(HIC==0 & CNid==0) %>%mutate(countrycats=ifelse(iso2 %in% c("VN"),iso2,"other"),
+                                     techcats=         case_when(
+   batteryid==1  ~ "Battery",
+   greenictid==1  ~ "Green ICT ",
+   batteryid*greenictid==0 ~ "Other"
+  ))
+
+
+
+
+```
+
+
+
+```{r}
+
+library(tidyverse)
+
+bigXfilter <- bigX %>% 
+  filter(HIC==0 & CNid==0) %>%
+  mutate(
+    countrycats = ifelse(iso2 %in% c("VN"), iso2, "other"),
+    techcats = case_when(
+      batteryid==1 ~ "Battery",
+      greenictid==1 ~ "Green ICT",
+      batteryid*greenictid==0 ~ "Other"
+    )
+  )
+
+plot_data <- bigXfilter %>%
+  mutate(ncountries_capped = ifelse(ncountries >= 5, "5+", as.character(ncountries))) %>%
+  group_by(techcats, countrycats, ncountries_capped) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(techcats, countrycats) %>%
+  mutate(share = n / sum(n))
+# Create stacked bar chart
+plot_data %>%
+  ggplot(aes(x = countrycats, y = share, fill = factor(ncountries_capped))) +
+  geom_col(position = "stack") +
+  facet_wrap(~techcats) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    x = "Country Category",
+    y = "Share of Observations",
+    fill = "Number of\nCountries",
+    title = "Distribution of Number of Collaborating Countries"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+
+
+
+feols(istrax_global~batteryid+greenictid+hicinno+hicinnoUS+hicinnoEurope+ncountries+multi, bigXfilter %>% filter(iso2=="VN"))
+
+feols(istrax_global~batteryid+greenictid+ncountries, bigXfilter %>% filter(iso2=="VN"))
+
+feols(istrax_global~batteryid+greenictid, bigXfilter %>% filter(iso2=="VN"))
+
+feols(istrax_nat~batteryid+ncountries+greenictid| iso2, bigXfilter )
+
+
+```
+
+
+
+```{r}
+
+
+
+# Create summary with mean ncountries
+plot_data <- bigXfilter %>%
+  group_by(techcats, countrycats) %>%
+  summarise(
+    mean_ncountries = mean(ncountries, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+
+# Create bar plot
+plot_data %>%
+  ggplot(aes(x = countrycats, y = mean_ncountries, fill = techcats)) +
+  geom_col(position = "dodge") +
+  labs(
+    x = "Country Category",
+    y = "Average Number of Countries",
+    fill = "Technology Category",
+    title = "Average Number of Collaborating Countries"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+ncolab(outcome="istrax_global",bigX=bigX %>% filter(hicinno==1))
+
+
+ncolab(outcome="istrax_global",bigX=bigX %>% filter(iso2=="VN"))
+
+
+
+ncolab(outcome="istrax_global",bigX=bigX %>% filter(batteryid==1&iso2=="VN"))
+
+ncolab(outcome="istrax_global",bigX=bigX %>% filter(greenictid==1&iso2=="VN"))
+
+
+```
+
+```{r}
+feols(istrax_global ~               ncountries,
+      bigX %>% filter(HIC==0&CNid==0))
+
+
+
+feols(istrax_global ~               ncountries+hicinno+multi+hicinnoUS*hicinnoEurope,
+      bigX %>% filter(HIC==0&CNid==0))
+
+
+feols(istrax_nationalkey_2009_2018 ~               ncountries+hicinno,
+      bigX %>% filter(HIC==0&CNid==0))
+
+
+feols(istrax_global ~               ncountries+hicinno,
+      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
+
+
+feols(istrax_global ~               ncountries+hicinno+hicinnoUS+hicinnoEurope,
+      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
+
+
+
+feols(istrax_global ~               ncountries+hicinno+hicinnoUS+hicinnoEurope+multi,
+      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
+
+
+
+feols(istrax_nationalkey_2009_2018 ~ ncountries+hicinno+hicinnoUS+hicinnoEurope+multi,
+      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
+
+```
+
+```{r}
+
+
+piepie=function(title=""){
+#collab_summary <- bigXfilter %>%  filter(  !(hicinno == 1 & multi == 0 )) %>% 
+collab_counts <- bigXfilter %>%
+  filter(  !(hicinno == 1 & multi == 0 )) %>%  
+  filter(HIC==0&CNid==0 & !(hicinno == 1 & multi == 0)) %>%
+  
+  count(hicinno,hicinnoUS,hicinnoEurope, multi) %>%
+ 
+  mutate(category = case_when(
+    hicinnoUS == 1     & multi == 1  ~ "US partner ",
+    hicinnoEurope == 1 & multi == 1  ~ "European partner ",
+    hicinno == 1       & hicinnoUS == 0 & hicinnoEurope==0 ~ "HIC other only",
+    hicinno == 0 & multi == 1 ~ "non HIC partner",
+    hicinno == 0 & multi == 0 ~ "No international Collaboration"
+  ),
+  percentage = round(n / sum(n) * 100, 1))
+
+  # Create donut chart
+  ggplot(collab_counts, aes(x = 2, y = n, fill = category)) +
+    geom_col(color = "white", linewidth = 1) +
+    coord_polar(theta = "y") +
+    xlim(c(0.5, 2.5)) +
+    geom_text(aes(label = paste0(n, "\n(", percentage, "%)")),
+              position = position_stack(vjust = 0.5),
+              size = 3.5, fontface = "bold") +
+    scale_fill_brewer(palette = "Set2", name = "Collaboration Type") +
+    labs(title = title) +
+    theme_void() +
+    theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+
+
+}
+
+
+```
+
+
+
+
+```{r}
+
+bigXfilter=bigX  
+  # %>% filter(iso2=="VN")
+piepie("All LMIC innovation")
+
+#rm(batteryid)
+bigXfilter=bigX %>% filter( batteryid==1)
+piepie("Battery")
+
+
+#rm(batteryid)
+bigXfilter=bigX %>% filter( batteryid==1 & iso2=="VN")
+piepie("Battery")
+
+
+
+#rm(batteryid)
+bigXfilter=bigX %>% filter( greenictid==1)
+piepie("Green ICT")
+
+
+
+```
+
+hence green ict is more US dominated
+
+```{r}
+
+bigXfilter=bigX %>% filter(iso2=="VN")
+piepie("Vietnamese Innovators")
+
+
+#rm(batteryid)
+bigXfilter=bigX %>% filter(iso2=="VN" & batteryid==1)
+piepie("Vietnamese Battery Innovation")
+
+#rm(batteryid)
+bigXfilter=bigX %>% filter(iso2=="VN" & greenictid==1)
+piepie("Vietnamese Green ICT")
+
+```
+
+
+```{r}
+#rm(batteryid)
+bigXfilter=bigX %>% filter(iso2=="VN" & greenid==1)
+piepie()
+
+
+
+```
+
+## regressions....
+```{r}
+library(fixest)
+model=feols(istrax_global*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,#+hicholder+hicinventor,
+      bigX %>% filter(HIC==0&CNid==0))
+print(model)
+library(fixest)
+model=feols(istrax_nationalkey_2009_2018*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,
+      bigX %>% filter(HIC==0&CNid==0))
+print(model)
+
+```
+
+US multinationals are better..including for national returns...
+
+
+```{r}
+
+library(fixest)
+model=feols(istrax_global*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,#+hicholder+hicinventor,
+      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
+print(model)
+library(fixest)
+model=feols(istrax_nationalkey_2009_2018*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,
+      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
+print(model)
+
+```
+
+
+
+```{r}
+library(fixest)
+model=feols(istrax_global*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,#+hicholder+hicinventor,
+        
+      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"&batteryid==1))
+print(model)
+
+library(fixest)
+model=feols(istrax_nationalkey_2009_2018*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,
+
+      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"&batteryid))
+print(model)
+
+
+
+
+```
+
 ### donut
 
 ```{r}
@@ -329,10 +920,10 @@ collab_counts <- bigX %>%
   count(hicinno, multi) %>%
   
   mutate(category = case_when(
-    hicinno == 1 & multi == 1 ~ "HIC & International",
+    hicinno == 1 & multi == 1 ~ "HIC ",
     hicinno == 1 & multi == 0 ~ "HIC Only",
-    hicinno == 0 & multi == 1 ~ "International Only",
-    hicinno == 0 & multi == 0 ~ "No Collaboration"
+    hicinno == 0 & multi == 1 ~ "non HIC",
+    hicinno == 0 & multi == 0 ~ "No international Collaboration"
   ),
   percentage = round(n / sum(n) * 100, 1))
 
@@ -359,11 +950,31 @@ ggplot(collab_counts, aes(x = 2, y = n, fill = category)) +
 
 
 
-model=feols(istrax_global*100 ~ hicinno+multi,
+library(fixest)
+model=feols(istrax_global*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,
+        
+      bigX %>% filter(CNid==1))
+print(model)
+
+
+
+model=feols(istrax_global*100 ~ #hicinno+multi
+           hicinno+multi+hicinnoUS+hicinnoEurope,
         
       bigX %>% filter(HIC==0&CNid==0))
 print(model)
 
+
+model=feols(istrax_nationalkey_2009_2018*100 ~ #hicinno+multi
+            hicinno+multi+hicinnoUS+hicinnoEurope,
+        
+      bigX %>% filter(HIC==0&CNid==0))
+print(model)
+
+
+```
+
+```{r}
 library(ggplot2)
 library(broom)
 
@@ -390,7 +1001,7 @@ ggplot(coef_data, aes(x = term, y = estimate)) +
 
 
 
-##### onlly emede ex cn
+##### only emede ex cn
 
 model=feols(istrax_EMDEexCN*100 ~ hicinno+multi,
       bigX %>% filter(HIC==0&CNid==0))
@@ -525,13 +1136,14 @@ plot_collab_returns(bigX, istrax_EMDEexCN)
 
 ```
 
-## find locations...
+# find locations...
 
 we are using tidygeocoder & mapbox...
 
 ```{r}
 
 library(arrow)
+library(dplyr)
 df=read_parquet(paste0(localbig,"\\data\\person_address.parquet"))
 
 library(tidygeocoder)
@@ -568,7 +1180,7 @@ recursive_mapbox=function(){
   
   df_filtered=df_filtered %>% mutate(rr=runif(1:n()))  %>% arrange(rr) %>% select(-rr)
   
-  some_addresses=df_filtered %>% head(1500) %>%  mutate(addressstr=paste(person_address,person_ctry_code,sep=","))
+  some_addresses=df_filtered %>% head(20000) %>%  mutate(addressstr=paste(person_address,person_ctry_code,sep=","))
   print(nrow(df_filtered))
   lat_longs_mapbox2 <- some_addresses %>%
     geocode(addressstr, method = 'mapbox', lat = latitude , long = longitude,full_results=F)
@@ -585,7 +1197,12 @@ recursive_mapbox=function(){
 
 
 lat_longs_mapbox=recursive_mapbox()
+lat_longs_mapbox=lat_longs_mapbox %>% distinct()
+
 write_parquet(lat_longs_mapbox,paste0(localbig,"\\data\\lat_longs_mapbox.parquet"))
+write_parquet(lat_longs_mapbox,paste0(localbigwb,"\\data\\lat_longs_mapbox.parquet"))
+
+
 
 
 
@@ -596,6 +1213,7 @@ write_parquet(lat_longs_mapbox,paste0(localbig,"\\data\\lat_longs_mapbox.parquet
 ### reading back in from disk
 
 ```{r}
+library(arrow)
 lat_longs_mapbox=read_parquet(paste0(localbig,"\\data\\lat_longs_mapbox.parquet"))
 
 
@@ -610,22 +1228,14 @@ always seem the case...
 
 
 ```{r}
-
 test=lat_longs_mapbox %>% filter(nchar(person_address)<=2)
-
 testdf=lat_longs_mapbox %>% filter(!is.na(person_ctry_code) & !is.na(longitude))
-
 
 library(sf)
 library(rnaturalearth)
 
 # Get world boundaries
 world <- ne_countries(scale = "medium", returnclass = "sf")
-
-
-
-
-
 
 
 
@@ -642,10 +1252,6 @@ world <- world %>%
 
 
 
-
-
-
-
 # Convert dataframe to spatial points
 df_sf <- st_as_sf(testdf, 
                   coords = c("longitude", "latitude"), 
@@ -655,32 +1261,6 @@ df_sf <- st_as_sf(testdf,
 ```
 
 
-# prepare progress bar
-library(progress)
-
-n <- nrow(testdf)
-
-pb <- progress_bar$new(
-  format = "[:bar] :percent eta: :eta",
-  total = n,
-  clear = FALSE,
-  width = 60
-)
-
-
-
-# Initialize ok column
-testdf$ok <- FALSE
-
-# Check each point
-for(i in 1:nrow(testdf)) {
-  country_poly <- world[world$iso_a2 == testdf$person_ctry_code[i], ]
-  if(nrow(country_poly) > 0) {
-    testdf$ok[i] <- st_intersects(df_sf[i,], country_poly, sparse = FALSE)[1,1]
-  }
-  pb$tick()
-}
-
 
 
 ```{r}
@@ -689,7 +1269,7 @@ for(i in 1:nrow(testdf)) {
 
 # Detect number of cores
 library(parallel)
-n_cores <- detectCores() - 2  # Leave one core free
+n_cores <- detectCores() - 5  # Leave one core free
 
 # Create cluster
 cl <- makeCluster(n_cores)
@@ -787,7 +1367,7 @@ if(sum(valid_coords) > 0) {
 
 ```
 
-clean up some more...
+### clean up some more...
 ```{r}
 
 lat_longs_mapbox$inferrediso2[lat_longs_mapbox$inferrediso2=="-99"|lat_longs_mapbox$inferrediso2==""] <- NA
@@ -948,7 +1528,11 @@ capital_coords <- capital_coords[order(capital_coords$iso2), ]
 
 # Print summary
 cat("Total countries:", nrow(capital_coords), "\n")
+
 ```
+
+
+
 
 
 
@@ -992,7 +1576,7 @@ ggplotly(p, tooltip = "text") %>%
 ## now infer long and lats from either the succesful matches or if there is none...let's just use the capital location...
 
 
-```{r}
+```{r, eval=FALSE}
   library(bigrquery)
   library(DBI)
   
@@ -1035,9 +1619,9 @@ bq_table_upload(
 ```{r}
 
 
+anti=df %>% anti_join(lat_longs_mapbox) %>% select(person_id,person_ctry_code)          # figure out addresses that are not in the mapbox frame
+anti=anti %>% filter(!is.na(person_ctry_code) & gsub("\\s+", "", person_ctry_code)!="") # We focus only on those where we have at least a country code
 
-anti=df %>% anti_join(lat_longs_mapbox) %>% select(person_id,person_ctry_code) 
-anti=anti %>% filter(!is.na(person_ctry_code) & gsub("\\s+", "", person_ctry_code)!="")
 
 
 
@@ -1065,6 +1649,236 @@ write_parquet(dfnew,paste0(localbig,"\\data\\dfnew.parquet"))
 
 ```
 
+### fuzzy matching of address strings
+
+```{r}
+library(data.table)
+library(stringdist)
+
+
+
+exact_coords=lat_longs_mapbox %>% select(person_address,person_ctry_code,latitude,longitude) %>% 
+  bind_rows(capital_coords %>% 
+            rename(person_address=capital,person_ctry_code=iso2) %>% 
+            select(longitude,latitude,person_address,person_ctry_code))
+write_parquet(exact_coords,paste0(localbig,"\\data\\exact_coords.parquet"))
+```
+
+
+```{r}
+exact_coords=read_parquet(paste0(localbig,"\\data\\exact_coords.parquet"))
+#rm(anti)
+antidf=df %>% anti_join(lat_longs_mapbox) %>% select(person_id,person_ctry_code,person_address)     # figure out addresses that are not in the mapbox frame
+antidf=antidf %>% filter(!is.na(person_ctry_code) & gsub("\\s+", "", person_ctry_code)!="")         # We focus only on those where we have at least a country code
+
+
+
+# Convert to data.table
+setDT(antidf)
+setDT(exact_coords)
+
+# Normalize addresses function
+normalize_address <- function(x) {
+  x %>%
+    tolower() %>%
+    gsub("[[:punct:]]", " ", .) %>%
+    gsub("\\s+", " ", .) %>%
+    trimws()
+}
+
+
+# Pre-process lookup table once
+exact_coords[, address_norm := normalize_address("person_address")]
+
+# Function to match addresses within a country
+match_country <- function(df_country, lookup_country) {
+  
+  # Normalize addresses
+  df_country[, address_norm := normalize_address(person_address)]
+  
+  # Exact matching
+  df_matched <- merge(
+    df_country, 
+    lookup_country[, .(address_norm, longitude, latitude, person_address)],
+    by = "address_norm",
+    all.x = TRUE,
+    suffixes = c("", "_matched")
+  )
+  
+  # Rename matched address column
+  setnames(df_matched, "person_address_matched", "matched_address", skip_absent = TRUE)
+  
+  # Initialize columns
+  df_matched[, `:=`(
+    match_type = ifelse(is.na(longitude), NA_character_, "exact"),
+    matched_address = ifelse(is.na(matched_address), NA_character_, matched_address)
+  )]
+  
+  # Fuzzy match for unmatched rows
+  unmatched_idx <- which(is.na(df_matched$match_type))
+  
+  if(length(unmatched_idx) > 0 && nrow(lookup_country) > 0) {
+    
+    unmatched_addresses <- df_matched$address_norm[unmatched_idx]
+    
+    # Fuzzy matching
+    matches <- stringdist::amatch(
+      unmatched_addresses,
+      lookup_country$address_norm,
+      method = "jw",
+      maxDist = 0.25,
+      nomatch = NA_integer_
+    )
+    
+    # Only update rows where a match was found
+    valid_matches <- !is.na(matches)
+    
+    if(any(valid_matches)) {
+      valid_idx <- unmatched_idx[valid_matches]
+      valid_match_positions <- matches[valid_matches]
+      
+      df_matched[valid_idx, `:=`(
+        longitude = lookup_country$longitude[valid_match_positions],
+        latitude = lookup_country$latitude[valid_match_positions],
+        matched_address = lookup_country$person_address[valid_match_positions],
+        match_type = "fuzzy"
+      )]
+    }
+  }
+  
+  # Select final columns
+  result <- df_matched[, .(person_ctry_code, person_address, longitude, 
+                           latitude, matched_address, match_type)]
+  
+  return(result)
+}
+
+
+
+```
+
+###############################>>>>>>>>>>>>>>>>>>>>>>
+# Process each country
+#countries <- unique(antidf$person_ctry_code)
+library(dplyr)
+countries <- unique(exact_coords$person_ctry_code)
+
+results <- lapply(countries, function(ctry) {
+  #ctry="GB"
+  cat("Processing country:", ctry, "\n")
+  
+  df_ctry <- antidf[person_ctry_code == ctry]
+  lookup_ctry <- exact_coords[person_ctry_code == ctry]
+  
+  if(nrow(lookup_ctry) == 0) {
+    # No lookup data for this country
+    df_ctry[, `:=`(longitude = NA_real_, 
+                   latitude = NA_real_,
+                   matched_address = NA_character_,
+                   match_type = "no_lookup")]
+    return(df_ctry[, .(person_ctry_code, person_address, longitude, 
+                       latitude, matched_address, match_type)])
+  }
+  
+  match_country(df_ctry, lookup_ctry)
+})
+
+# Combine all results
+df_final <- rbindlist(results)
+
+
+###############>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+
+```{r}
+library(data.table)
+library(future.apply)
+library(progressr)
+
+# Setup parallel processing
+library(dplyr)
+countries <- unique(exact_coords$person_ctry_code)
+
+options(future.globals.maxSize = 1.2 * 1024^3)  # 2 GB
+plan(multisession, workers = 1)  # Adjust based on CPU cores (use parallel::detectCores() to check)
+
+# With progress bar
+with_progress({
+  p <- progressor(along = countries)
+  
+  results <- future_lapply(countries, function(ctry) {
+    # Load required packages in each worker
+    library(data.table)
+    
+    p(sprintf("Country: %s", ctry))
+    
+    df_ctry <- antidf[person_ctry_code == ctry]
+    lookup_ctry <- exact_coords[person_ctry_code == ctry]
+    
+    if(nrow(lookup_ctry) == 0) {
+      df_ctry[, `:=`(longitude = NA_real_, 
+                     latitude = NA_real_,
+                     matched_address = NA_character_,
+                     match_type = "no_lookup")]
+      return(df_ctry[, .(person_ctry_code, person_address, longitude, 
+                         latitude, matched_address, match_type)])
+    }
+    
+    match_country(df_ctry, lookup_ctry)
+  }, future.seed = TRUE)
+})
+
+# Combine all results
+df_final <- rbindlist(results)
+
+# Reset to sequential processing when done
+plan(sequential)
+
+
+# Check matching statistics
+df_final[, .N, by = match_type]
+
+
+```
+
+
+### testing embeddings...
+```{r,eval=FALSE}
+library(text)  # R interface to transformers
+library(data.table)
+
+# Initialize text package (one-time setup)
+# text::textrpp_install()
+# text::textrpp_initialize()
+
+# Get embeddings for lookup table (do this once and save)
+lookup_embeddings <- textEmbed(
+  lat_longs_mapbox$address,
+  model = "sentence-transformers/all-MiniLM-L6-v2"
+)
+
+
+
+```
+
+### Some stats...
+
+```{r}
+library(countrycode)
+testtab=dfnew %>% group_by(person_ctry_code) %>% summarise(n())
+
+# Or for more detailed regions
+dfnew$region <- countrycode(sourcevar = dfnew$person_ctry_code,
+                         origin = "iso2c",
+                         destination = "region")
+
+
+testtab=dfnew %>% group_by(region) %>% summarise(n())
+
+
+
+
+```
 
 ```{r}
 
@@ -1080,7 +1894,7 @@ dfnew=read_parquet(paste0(localbig,"\\data\\dfnew.parquet"))
 
 library(data.table)
 dfnew <- as.data.table(dfnew)
-dt_sample <- dfnew[sample(.N, 100000)]
+dt_sample <- dfnew[sample(.N, 1000000)]
 
 # With clustering (much better for 100k points!)
 leaflet(dt_sample) %>%
@@ -1111,5 +1925,61 @@ bq_table_upload(
   write_disposition = "WRITE_TRUNCATE"  # Replaces existing table
 )
 ```
-  
 
+
+
+
+
+# double fixed effects...
+
+
+### what about transitions?
+
+
+```{r}
+
+#ainventors=inventors %>% group_by(person_id) %>% summarise(nn=n())
+
+library(collapse)
+ainventors = fcount(inventors, person_id)
+
+
+test=ainventors %>% filter(N>1) # a good deal of inventors with more than one innovation
+multi_invent_innos=inventors %>% inner_join(test)
+#testLMIC=test %>% inner_join(bigX)
+#ainventors = inventors %>% fgroup_by(person_id) %>% fsummarise(nn = fn())
+multi_invent_innos=multi_invent_innos %>% rename(invent_id=person_id)
+multi_invent_innos=multi_invent_innos %>% rename(Ninv=N)
+
+
+
+aholders=fcount(holders,person_id)
+test=aholders %>% filter(N>1) # a good deal of inventors with more than one innovation
+#multi_hold_innos=holders %>% inner_join(test)
+multi_hold_innos=multi_hold_innos %>% rename(holder_id=person_id)
+multi_hold_innos=multi_hold_innos %>% rename(Nhold=N)
+
+#testLMIChold=test %>% inner_join(bigX)
+#ainventors = inventors %>% fgroup_by(person_id) %>% fsummarise(nn = fn())
+
+
+rm(aholders,ainventors,test)
+
+inv_hold=multi_invent_innos %>% inner_join(multi_hold_innos)
+
+rm(multi_hold_innos,multi_invent_innos)
+
+```
+
+
+
+```{r}
+
+dfnew=read_parquet(paste0(localbig,"\\data\\dfnew.parquet"))
+dfnew_ctry=dfnew %>% select(person_id,person_ctry_code)
+rm(dfnew)
+
+
+inv_hold = inv_hold %>% inner_dfnew()
+
+```
