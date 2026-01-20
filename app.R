@@ -1,441 +1,405 @@
-# Interactive City Network Shiny App
-# Allows filtering connections by country of origin
-#
-# To run: shiny::runApp("city_network_app.R")
+###############################################################
+# SHINY APP — Curves + Arrows + Chain Colors + TECH HIERARCHY
+###############################################################
 
 library(shiny)
-library(leaflet)
 library(dplyr)
-library(geosphere)
-library(maps)
-library(RColorBrewer)
+library(leaflet)
+library(countrycode)
+library(shinyBS)
+library(fst)
+library(jsonlite)
 
-# Set seed for reproducibility
-set.seed(123)
+options(jsonlite_legacy_as_json = TRUE)
 
-# ============================================================================
-# DATA PREPARATION (runs once when app starts)
-# ============================================================================
+# Source Dropbox authentication functions
+source("dropbox_auth.R")
 
-cat("Loading data...\n")
+###############################################################
+# 1️⃣ DROPBOX PATH DETECTION
+###############################################################
 
-# Load world cities
-data(world.cities)
-
-# Sample 200 cities
-major_cities <- world.cities %>%
-  filter(pop > 100000) %>%
-  sample_n(200) %>%
-  select(name, country.etc, lat, long, pop) %>%
-  mutate(
-    city_id = 1:n(),
-    city_label = paste0(name, ", ", country.etc)
-  )
-
-# Create country color mapping
-unique_countries <- unique(major_cities$country.etc)
-n_countries <- length(unique_countries)
-
-if (n_countries <= 12) {
-  country_colors <- brewer.pal(max(3, n_countries), "Set3")[1:n_countries]
-} else if (n_countries <= 24) {
-  country_colors <- c(
-    brewer.pal(12, "Set3"),
-    brewer.pal(12, "Paired")
-  )[1:n_countries]
-} else {
-  country_colors <- rainbow(n_countries, s = 0.7, v = 0.9)
-}
-
-country_color_map <- data.frame(
-  country = unique_countries,
-  color = country_colors,
-  stringsAsFactors = FALSE
-)
-
-major_cities <- major_cities %>%
-  left_join(country_color_map, by = c("country.etc" = "country"))
-
-# Generate connections
-n_connections <- 200
-
-connections <- data.frame(
-  from_id = sample(major_cities$city_id, n_connections, replace = TRUE),
-  to_id = sample(major_cities$city_id, n_connections, replace = TRUE)
-) %>%
-  filter(from_id != to_id)
-
-# Filter out wrap-around connections
-connections_with_coords <- connections %>%
-  left_join(major_cities %>% select(city_id, long, lat, country.etc, color),
-            by = c("from_id" = "city_id")) %>%
-  left_join(major_cities %>% select(city_id, long, lat),
-            by = c("to_id" = "city_id"), suffix = c("_from", "_to"))
-
-all_connections <- connections_with_coords %>%
-  mutate(lon_diff = abs(long_to - long_from)) %>%
-  filter(lon_diff <= 150)
-
-# Track duplicates
-all_connections <- all_connections %>%
-  group_by(from_id, to_id) %>%
-  mutate(
-    connection_count = n(),
-    connection_index = row_number()
-  ) %>%
-  ungroup()
-
-cat("Data loaded:", nrow(major_cities), "cities,", nrow(all_connections), "connections\n")
-
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-adjust_for_dateline <- function(lon1, lat1, lon2, lat2) {
-  if (abs(lon2 - lon1) > 180) {
-    if (lon1 < lon2) {
-      lon1 <- lon1 + 360
-    } else {
-      lon2 <- lon2 + 360
-    }
-  }
-  return(list(lon1 = lon1, lat1 = lat1, lon2 = lon2, lat2 = lat2))
-}
-
-offset_route_smooth <- function(route_coords, offset_degrees = 0) {
-  if (offset_degrees == 0 || nrow(route_coords) < 3) {
-    return(route_coords)
+# Function to detect local Dropbox path from Dropbox's config file
+get_dropbox_path <- function() {
+  if (.Platform$OS.type == "windows") {
+    info_paths <- c(
+      file.path(Sys.getenv("APPDATA"), "Dropbox", "info.json"),
+      file.path(Sys.getenv("LOCALAPPDATA"), "Dropbox", "info.json")
+    )
+  } else {
+    info_paths <- file.path(Sys.getenv("HOME"), ".dropbox", "info.json")
   }
 
-  n_points <- nrow(route_coords)
-  offset_route <- route_coords
-  mid_idx <- round(n_points / 2)
-
-  if (mid_idx > 1 && mid_idx < n_points) {
-    idx_before <- max(1, mid_idx - 10)
-    idx_after <- min(n_points, mid_idx + 10)
-
-    dx <- route_coords[idx_after, 1] - route_coords[idx_before, 1]
-    dy <- route_coords[idx_after, 2] - route_coords[idx_before, 2]
-
-    length <- sqrt(dx^2 + dy^2)
-    if (length > 0) {
-      perp_x <- -dy / length
-      perp_y <- dx / length
-
-      for (i in 2:(n_points - 1)) {
-        t <- (i - 1) / (n_points - 1)
-        weight <- sin(t * pi)
-
-        offset_route[i, 1] <- route_coords[i, 1] + perp_x * offset_degrees * weight
-        offset_route[i, 2] <- route_coords[i, 2] + perp_y * offset_degrees * weight
+  for (p in info_paths) {
+    if (file.exists(p)) {
+      info <- jsonlite::fromJSON(p)
+      if (!is.null(info$business)) {
+        return(info$business$path)
+      } else if (!is.null(info$personal)) {
+        return(info$personal$path)
       }
     }
   }
-
-  return(offset_route)
+  return(NULL)
 }
 
-add_arrow_decorator <- function(map, route_coords, color = "#3498db",
-                                weight = 2, opacity = 0.6, label = NULL) {
-  map <- map %>%
-    addPolylines(
-      lng = route_coords[, 1],
-      lat = route_coords[, 2],
-      color = color,
-      weight = weight,
-      opacity = opacity,
-      label = label
-    )
-
-  n_points <- nrow(route_coords)
-  arrow_pos <- round(n_points * 0.85)
-
-  if (arrow_pos < n_points - 5 && arrow_pos > 0) {
-    p1 <- route_coords[arrow_pos, ]
-    p2 <- route_coords[min(arrow_pos + 5, n_points), ]
-
-    dx <- p2[1] - p1[1]
-    dy <- p2[2] - p1[2]
-    angle <- atan2(dy, dx)
-
-    arrow_length <- 1.5
-    arrow_angle <- 25 * pi / 180
-
-    arrow_left <- c(
-      p2[1] - arrow_length * cos(angle - arrow_angle),
-      p2[2] - arrow_length * sin(angle - arrow_angle)
-    )
-    arrow_right <- c(
-      p2[1] - arrow_length * cos(angle + arrow_angle),
-      p2[2] - arrow_length * sin(angle + arrow_angle)
-    )
-
-    map <- map %>%
-      addPolylines(
-        lng = c(arrow_left[1], p2[1], arrow_right[1]),
-        lat = c(arrow_left[2], p2[2], arrow_right[2]),
-        color = color,
-        weight = weight + 1,
-        opacity = opacity
-      )
+# Try to find local Dropbox Apps/iseapp/inglobe folder
+get_local_inglobe_path <- function() {
+  # First check environment variable
+  env_path <- Sys.getenv("INGLOBE_PATH_LOCAL")
+  if (nzchar(env_path) && dir.exists(env_path)) {
+    return(env_path)
   }
-
-  return(map)
+  # Try to detect Dropbox path automatically
+  dropbox_root <- get_dropbox_path()
+  if (!is.null(dropbox_root)) {
+    inglobe_path <- file.path(dropbox_root, "Apps", "iseapp", "inglobe")
+    if (dir.exists(inglobe_path)) {
+      return(inglobe_path)
+    }
+  }
+  return(NULL)
 }
 
-# ============================================================================
-# SHINY UI
-# ============================================================================
+# Get the local path (cached)
+inglobe_local_path <- get_local_inglobe_path()
+if (!is.null(inglobe_local_path)) {
+  message("Using local Dropbox path: ", inglobe_local_path)
+} else {
+  message("Local Dropbox not found, will use online Dropbox")
+}
+
+# Helper function for local file paths
+localpath_fname <- function(fname) {
+  if (!is.null(inglobe_local_path)) {
+    fname <- sub("^/+", "", fname)
+    return(file.path(inglobe_local_path, fname))
+  }
+  return("")
+}
+
+###############################################################
+# 2️⃣ LOAD DATA
+###############################################################
+
+# Load long_final from local Dropbox or online
+pp <- localpath_fname("data/long_final.fst")
+if (file.exists(pp)) {
+  df_raw <- read_fst(pp)
+  message("Loaded long_final.fst locally: ", nrow(df_raw), " rows")
+} else {
+  df_raw <- dropbox_read_fst("/inglobe/data/long_final.fst")
+  message("Loaded long_final.fst from Dropbox: ", nrow(df_raw), " rows")
+}
+
+df <- df_raw %>%
+  arrange(sce_country, tech_group, tech_subgroup, source_id, wave) %>%
+  mutate(
+    wave = as.integer(wave),
+    chain_id = paste0(
+      sce_country, "_",
+      tech_group, "_",
+      ifelse(is.na(tech_subgroup), "ALL", tech_subgroup), "_",
+      sample_size, "_",
+      source_id
+    )
+  )
+
+###############################################################
+# 3️⃣ COUNTRY GROUP DEFINITIONS
+###############################################################
+
+all_countries <- sort(unique(na.omit(countrycode::codelist$iso2c)))
+
+north_america <- c("US","CA","MX")
+south_america <- c("BR","AR","CL","CO","PE","UY","EC","VE")
+western_europe <- c("FR","GB","DE","NL","BE","CH","AT","IE","LU")
+northern_europe <- c("SE","NO","FI","DK","IS")
+southern_europe <- c("IT","ES","PT","GR","MT","CY")
+eastern_europe <- c("PL","CZ","HU","SK","SI","HR","RO","BG",
+                    "RS","BA","MK","AL","EE","LV","LT","UA","BY","MD")
+middle_east <- c("TR","IL","SA","AE","QA","KW","OM","BH","JO","IR","IQ","LB")
+africa <- c("ZA","EG","NG","KE","GH","SN","CI","MA","TN","DZ","ET","TZ","UG","ZM","MZ")
+central_asia <- c("KZ","UZ","KG","TJ","TM")
+south_asia <- c("IN","PK","BD","LK","NP")
+east_asia <- c("CN","JP","KR","MN")
+south_east_asia <- c("SG","MY","TH","VN","ID","PH","KH","LA","MM","BN")
+oceania <- c("AU","NZ","FJ")
+
+group_definitions <- list(
+  "All countries"   = all_countries,
+  "North America"   = north_america,
+  "South America"   = south_america,
+  "Western Europe"  = western_europe,
+  "Northern Europe" = northern_europe,
+  "Southern Europe" = southern_europe,
+  "Eastern Europe"  = eastern_europe,
+  "Middle East"     = middle_east,
+  "Africa"          = africa,
+  "Central Asia"    = central_asia,
+  "South Asia"      = south_asia,
+  "East Asia"       = east_asia,
+  "South East Asia" = south_east_asia,
+  "Oceania"         = oceania
+)
+
+expand_country_selection <- function(selected) {
+  unique(unlist(lapply(selected, function(x) {
+    if (x %in% names(group_definitions)) group_definitions[[x]] else x
+  })))
+}
+
+###############################################################
+# 4️⃣ TECHNOLOGY GROUP DEFINITIONS
+###############################################################
+
+tech_group_definitions <- list(
+  "All"        = unique(df$sce_tech_display[df$tech_group == "All"]),
+  "Green"      = unique(df$sce_tech_display[df$tech_group == "Green"]),
+  "Non-Green"  = unique(df$sce_tech_display[df$tech_group == "Non-Green"])
+)
+
+# Remove NA safely
+tech_group_definitions <- lapply(
+  tech_group_definitions,
+  function(x) sort(unique(na.omit(x)))
+)
+
+grouped_tech_choices <- list(
+  "Technology Groups" = names(tech_group_definitions),
+  "Individual Technologies" = sort(unique(df$sce_tech_display))
+)
+
+expand_tech_selection <- function(selected) {
+  unique(unlist(lapply(selected, function(x) {
+    if (x %in% names(tech_group_definitions)) {
+      tech_group_definitions[[x]]
+    } else {
+      x
+    }
+  })))
+}
+
+###############################################################
+# 5️⃣ COLOR LOGIC
+###############################################################
+
+get_scenario_color <- function(tech_group) {
+  tech_group <- tolower(tech_group)
+  if (tech_group == "all")        return("blue")
+  if (tech_group == "non-green")  return("brown")
+  if (tech_group == "green")      return("green")
+  return("black")
+}
+
+get_random_shade <- function(base_color) {
+  
+  base_hue <- switch(base_color,
+                     "blue"  = 210,
+                     "green" = 120,
+                     "brown" = 30,
+                     0)
+  
+  hue <- base_hue + runif(1, -8, 8)
+  sat <- runif(1, 0.55, 0.75)
+  lig <- runif(1, 0.40, 0.65)
+  
+  h <- (hue %% 360) / 360
+  q <- if (lig < 0.5) lig * (1 + sat) else lig + sat - lig * sat
+  p <- 2 * lig - q
+  
+  hue_to_rgb <- function(t) {
+    t <- ifelse(t < 0, t + 1, ifelse(t > 1, t - 1, t))
+    if (t < 1/6)      return(p + (q - p) * 6 * t)
+    else if (t < 1/2) return(q)
+    else if (t < 2/3) return(p + (q - p) * (2/3 - t) * 6)
+    else              return(p)
+  }
+  
+  r <- hue_to_rgb(h + 1/3)
+  g <- hue_to_rgb(h)
+  b <- hue_to_rgb(h - 1/3)
+  
+  sprintf("#%02X%02X%02X", round(r*255), round(g*255), round(b*255))
+}
+
+###############################################################
+# 6️⃣ CURVE FUNCTION
+###############################################################
+
+make_curve <- function(sx, sy, tx, ty, n = 40, bend = 0.3) {
+  if (sx == tx && sy == ty)
+    return(data.frame(lon = c(sx, tx), lat = c(sy, ty)))
+  
+  mx <- (sx + tx) / 2
+  my <- (sy + ty) / 2
+  
+  dx <- tx - sx
+  dy <- ty - sy
+  d  <- sqrt(dx^2 + dy^2)
+  if (d == 0) d <- 1
+  
+  px <- -dy / d
+  py <-  dx / d
+  
+  h <- bend * d
+  
+  cx <- mx + px * h
+  cy <- my + py * h
+  
+  t <- seq(0, 1, length.out = n)
+  
+  lon <- (1 - t)^2 * sx + 2 * (1 - t) * t * cx + t^2 * tx
+  lat <- (1 - t)^2 * sy + 2 * (1 - t) * t * cy + t^2 * ty
+  
+  data.frame(lon = lon, lat = lat)
+}
+
+###############################################################
+# 7️⃣ UI
+###############################################################
 
 ui <- fluidPage(
-  titlePanel("Knowledge Flow Visualizer - KNOFLOVIZ"),
-
-  sidebarLayout(
-    sidebarPanel(
-      width = 3,
-
-      h4("Filter by Origin Country"),
-
-      selectInput(
-        "countries",
-        "Select Countries:",
-        choices = sort(unique_countries),
-        selected = NULL,
-        multiple = TRUE,
-        selectize = TRUE
-      ),
-
-      checkboxInput(
-        "show_all",
-        "Show All Countries",
-        value = TRUE
-      ),
-
-      hr(),
-
-      actionButton(
-        "select_top10",
-        "Select Top 10 Countries",
-        class = "btn-primary btn-sm"
-      ),
-
-      actionButton(
-        "clear_selection",
-        "Clear Selection",
-        class = "btn-secondary btn-sm"
-      ),
-
-      hr(),
-
-      h4("Statistics"),
-      verbatimTextOutput("stats"),
-
-      hr(),
-
-      h4("Country Legend"),
-      htmlOutput("country_legend")
+  
+  titlePanel("Patent Propagation Mapping Tool"),
+  
+  bsCollapse(
+    bsCollapsePanel(
+      "About this tool", style = "info",
+      p("This tool visualizes propagation chains between innovators.")
+    )
+  ),
+  br(),
+  
+  fluidRow(
+    column(6,
+           selectInput(
+             "sce_country", "Country or Group:",
+             choices = list(
+               "Predefined Groups" = names(group_definitions),
+               "Individual Countries" = sort(unique(df$sce_country))
+             ),
+             multiple = TRUE,
+             selected = "Africa"
+           )
     ),
-
-    mainPanel(
-      width = 9,
-      leafletOutput("map", height = "800px")
+    column(6,
+           selectInput(
+             "sce_tech_display", "Technology or Group:",
+             choices = grouped_tech_choices,
+             multiple = TRUE,
+             selected = "Green"
+           )
+    )
+  ),
+  
+  br(),
+  
+  leafletOutput("map", height = 650),
+  
+  br(),
+  
+  fluidRow(
+    column(6,
+           sliderInput(
+             "max_wave", "Max Wave",
+             min = min(df$wave), max = max(df$wave), value = 1,
+             step = 1
+           )
+    ),
+    column(6,
+           selectInput(
+             "sample_size", "Sample Size:",
+             choices = sort(unique(df$sample_size)),
+             selected = sort(unique(df$sample_size))[1]
+           )
     )
   )
 )
 
-# ============================================================================
-# SHINY SERVER
-# ============================================================================
+###############################################################
+# 8️⃣ SERVER
+###############################################################
 
 server <- function(input, output, session) {
-
-  # Reactive: Get filtered connections based on selected countries
-  filtered_connections <- reactive({
-    if (input$show_all) {
-      return(all_connections)
-    }
-
-    if (is.null(input$countries) || length(input$countries) == 0) {
-      return(data.frame())  # Empty dataframe if no countries selected
-    }
-
-    all_connections %>%
-      filter(country.etc %in% input$countries)
+  
+  edges_filtered <- reactive({
+    
+    selected_countries <- expand_country_selection(input$sce_country)
+    selected_techs <- expand_tech_selection(input$sce_tech_display)
+    
+    df %>%
+      filter(
+        sce_country %in% selected_countries,
+        sce_tech_display %in% selected_techs,
+        wave <= input$max_wave,
+        sample_size == input$sample_size
+      )
   })
-
-  # Reactive: Calculate statistics
-  connection_stats <- reactive({
-    conns <- filtered_connections()
-
-    if (nrow(conns) == 0) {
-      return(list(
-        total = 0,
-        countries = 0,
-        avg_per_country = 0
-      ))
-    }
-
-    list(
-      total = nrow(conns),
-      countries = length(unique(conns$country.etc)),
-      avg_per_country = round(nrow(conns) / length(unique(conns$country.etc)), 1)
-    )
+  
+  nodes_filtered <- reactive({
+    edges <- edges_filtered()
+    
+    bind_rows(
+      edges %>% select(lon = source_lon, lat = source_lat),
+      edges %>% select(lon = target_lon, lat = target_lat)
+    ) %>% distinct()
   })
-
-  # Observer: Update show_all checkbox when countries are selected/deselected
-  observeEvent(input$countries, {
-    if (!is.null(input$countries) && length(input$countries) > 0) {
-      updateCheckboxInput(session, "show_all", value = FALSE)
-    }
-  })
-
-  observeEvent(input$show_all, {
-    if (input$show_all) {
-      updateSelectInput(session, "countries", selected = character(0))
-    }
-  })
-
-  # Observer: Select top 10 countries button
-  observeEvent(input$select_top10, {
-    country_counts <- all_connections %>%
-      group_by(country.etc) %>%
-      summarise(count = n()) %>%
-      arrange(desc(count)) %>%
-      head(10)
-
-    updateSelectInput(session, "countries", selected = country_counts$country.etc)
-    updateCheckboxInput(session, "show_all", value = FALSE)
-  })
-
-  # Observer: Clear selection button
-  observeEvent(input$clear_selection, {
-    updateSelectInput(session, "countries", selected = character(0))
-    updateCheckboxInput(session, "show_all", value = TRUE)
-  })
-
-  # Output: Main map
+  
   output$map <- renderLeaflet({
-    # Base map (static)
     leaflet() %>%
-      addProviderTiles(providers$CartoDB.DarkMatter) %>%
-      setView(lng = 0, lat = 20, zoom = 2) %>%
-      addCircleMarkers(
-        data = major_cities,
-        lng = ~long,
-        lat = ~lat,
-        radius = 3,
-        color = "#e74c3c",
-        fillColor = "#e74c3c",
-        fillOpacity = 0.7,
-        stroke = FALSE,
-        popup = ~paste0("<b>", city_label, "</b><br>",
-                        "Population: ", format(pop, big.mark = ","))
-      )
+      addTiles() %>%
+      setView(10, 20, zoom = 3)
   })
-
-  # Observer: Update connections when filter changes
+  
   observe({
-    conns <- filtered_connections()
-
-    # Create a new map proxy to clear old connections
-    map_proxy <- leafletProxy("map") %>%
-      clearShapes()
-
-    if (nrow(conns) == 0) {
-      return(map_proxy)
-    }
-
-    # Add filtered connections
-    for (i in 1:nrow(conns)) {
-      from_city <- major_cities[major_cities$city_id == conns$from_id[i], ]
-      to_city <- major_cities[major_cities$city_id == conns$to_id[i], ]
-
-      if (nrow(from_city) > 0 && nrow(to_city) > 0) {
-        adjusted <- adjust_for_dateline(
-          from_city$long, from_city$lat,
-          to_city$long, to_city$lat
-        )
-
-        route <- gcIntermediate(
-          c(adjusted$lon1, adjusted$lat1),
-          c(adjusted$lon2, adjusted$lat2),
-          n = 100,
-          addStartEnd = TRUE,
-          sp = FALSE
-        )
-
-        route[, 1] <- ifelse(route[, 1] > 180, route[, 1] - 360, route[, 1])
-        route[, 1] <- ifelse(route[, 1] < -180, route[, 1] + 360, route[, 1])
-
-        if (conns$connection_count[i] > 1) {
-          offset_multiplier <- ceiling(conns$connection_index[i] / 2)
-          offset_direction <- ifelse(conns$connection_index[i] %% 2 == 1, 1, -1)
-          offset_degrees <- offset_direction * offset_multiplier * 0.8
-          route <- offset_route_smooth(route, offset_degrees)
-        }
-
-        route_color <- conns$color[i]
-
-        map_proxy <- add_arrow_decorator(
-          map_proxy,
-          route,
-          color = route_color,
-          weight = 1.5,
-          opacity = 0.5,
-          label = paste(from_city$city_label, "→", to_city$city_label)
-        )
-      }
-    }
-  })
-
-  # Output: Statistics
-  output$stats <- renderText({
-    stats <- connection_stats()
-    paste0(
-      "Connections: ", stats$total, "\n",
-      "Countries: ", stats$countries, "\n",
-      "Avg per country: ", stats$avg_per_country
+    
+    edges <- edges_filtered()
+    nodes <- nodes_filtered()
+    
+    if (nrow(edges) == 0) return()
+    
+    base_color <- get_scenario_color(unique(edges$tech_group)[1])
+    
+    m <- leafletProxy("map") %>% clearShapes() %>% clearMarkers()
+    
+    m <- m %>% addCircleMarkers(
+      data = nodes,
+      lng = ~lon, lat = ~lat,
+      radius = 5,
+      fillColor = "white", fillOpacity = 1,
+      color = "black", weight = 1
     )
-  })
-
-  # Output: Country legend
-  output$country_legend <- renderUI({
-    country_counts <- all_connections %>%
-      group_by(country.etc, color) %>%
-      summarise(count = n(), .groups = "drop") %>%
-      arrange(desc(count))
-
-    legend_items <- lapply(1:min(15, nrow(country_counts)), function(i) {
-      tags$div(
-        style = "margin-bottom: 5px;",
-        tags$span(
-          style = paste0("display: inline-block; width: 20px; height: 12px; ",
-                        "background-color: ", country_counts$color[i], "; ",
-                        "margin-right: 8px; border: 1px solid #333;")
-        ),
-        tags$span(
-          style = "font-size: 12px;",
-          paste0(country_counts$country.etc[i], " (", country_counts$count[i], ")")
-        )
+    
+    chain_colors <- edges %>%
+      distinct(chain_id) %>%
+      mutate(color = sapply(seq_len(n()), function(i)
+        get_random_shade(base_color)
+      ))
+    
+    for (i in seq_len(nrow(edges))) {
+      
+      chain <- edges$chain_id[i]
+      this_color <- chain_colors$color[chain_colors$chain_id == chain]
+      
+      curve_pts <- make_curve(
+        edges$source_lon[i], edges$source_lat[i],
+        edges$target_lon[i], edges$target_lat[i]
       )
-    })
-
-    tags$div(
-      style = "max-height: 400px; overflow-y: auto;",
-      legend_items,
-      if (nrow(country_counts) > 15) {
-        tags$div(
-          style = "font-size: 11px; color: #666; margin-top: 10px;",
-          paste0("... and ", nrow(country_counts) - 15, " more countries")
-        )
-      }
-    )
+      
+      m <- m %>% addPolylines(
+        lng = curve_pts$lon,
+        lat = curve_pts$lat,
+        color = this_color,
+        weight = 2.5,
+        opacity = 1
+      )
+    }
   })
 }
 
-# ============================================================================
-# RUN APP
-# ============================================================================
+###############################################################
+# 9️⃣ RUN APP
+###############################################################
 
-shinyApp(ui = ui, server = server)
+shinyApp(ui, server)

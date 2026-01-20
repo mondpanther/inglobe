@@ -3,21 +3,94 @@
 ###############################################################
 
 library(shiny)
-library(readr)
 library(dplyr)
 library(leaflet)
 library(countrycode)
 library(shinyBS)
+library(fst)
+library(jsonlite)
 
 options(jsonlite_legacy_as_json = TRUE)
 
+# Source Dropbox authentication functions
+source("dropbox_auth.R")
+
 ###############################################################
-# 1️⃣ LOAD DATA
+# 1️⃣ DROPBOX PATH DETECTION
 ###############################################################
 
-df_raw <- read_csv(
-  "C:/Users/aforest/OneDrive - WBG/Desktop/Research/Open Alex/DataLab/R_things/long_final.csv"
-)
+# Function to detect local Dropbox path from Dropbox's config file
+get_dropbox_path <- function() {
+  if (.Platform$OS.type == "windows") {
+    info_paths <- c(
+      file.path(Sys.getenv("APPDATA"), "Dropbox", "info.json"),
+      file.path(Sys.getenv("LOCALAPPDATA"), "Dropbox", "info.json")
+    )
+  } else {
+    info_paths <- file.path(Sys.getenv("HOME"), ".dropbox", "info.json")
+  }
+
+  for (p in info_paths) {
+    if (file.exists(p)) {
+      info <- jsonlite::fromJSON(p)
+      if (!is.null(info$business)) {
+        return(info$business$path)
+      } else if (!is.null(info$personal)) {
+        return(info$personal$path)
+      }
+    }
+  }
+  return(NULL)
+}
+
+# Try to find local Dropbox Apps/iseapp/inglobe folder
+get_local_inglobe_path <- function() {
+  # First check environment variable
+  env_path <- Sys.getenv("INGLOBE_PATH_LOCAL")
+  if (nzchar(env_path) && dir.exists(env_path)) {
+    return(env_path)
+  }
+  # Try to detect Dropbox path automatically
+  dropbox_root <- get_dropbox_path()
+  if (!is.null(dropbox_root)) {
+    inglobe_path <- file.path(dropbox_root, "Apps", "iseapp", "inglobe")
+    if (dir.exists(inglobe_path)) {
+      return(inglobe_path)
+    }
+  }
+  return(NULL)
+}
+
+# Get the local path (cached)
+inglobe_local_path <- get_local_inglobe_path()
+if (!is.null(inglobe_local_path)) {
+  message("Using local Dropbox path: ", inglobe_local_path)
+} else {
+  message("Local Dropbox not found, will use online Dropbox")
+}
+
+# Helper function for local file paths
+localpath_fname <- function(fname) {
+  if (!is.null(inglobe_local_path)) {
+    fname <- sub("^/+", "", fname)
+    return(file.path(inglobe_local_path, fname))
+  }
+  return("")
+}
+
+###############################################################
+# 2️⃣ LOAD DATA
+###############################################################
+
+# Load long_final from local Dropbox or online
+pp <- localpath_fname("data/long_final.fst")
+if (file.exists(pp)) {
+  df_raw <- read_fst(pp)
+  message("Loaded long_final.fst locally: ", nrow(df_raw), " rows")
+} else {
+  df_raw <- dropbox_read_fst("/inglobe/data/long_final.fst")
+  message("Loaded long_final.fst from Dropbox: ", nrow(df_raw), " rows")
+}
 
 df <- df_raw %>%
   arrange(sce_country, tech_group, tech_subgroup, source_id, wave) %>%
@@ -33,7 +106,7 @@ df <- df_raw %>%
   )
 
 ###############################################################
-# 2️⃣ COUNTRY GROUP DEFINITIONS (UNCHANGED)
+# 3️⃣ COUNTRY GROUP DEFINITIONS
 ###############################################################
 
 all_countries <- sort(unique(na.omit(countrycode::codelist$iso2c)))
@@ -77,7 +150,7 @@ expand_country_selection <- function(selected) {
 }
 
 ###############################################################
-# 3️⃣ TECHNOLOGY GROUP DEFINITIONS (NEW — MIRRORS COUNTRY LOGIC)
+# 4️⃣ TECHNOLOGY GROUP DEFINITIONS
 ###############################################################
 
 tech_group_definitions <- list(
@@ -108,7 +181,7 @@ expand_tech_selection <- function(selected) {
 }
 
 ###############################################################
-# 4️⃣ COLOR LOGIC (UNCHANGED — BASED ON tech_group)
+# 5️⃣ COLOR LOGIC
 ###############################################################
 
 get_scenario_color <- function(tech_group) {
@@ -151,7 +224,7 @@ get_random_shade <- function(base_color) {
 }
 
 ###############################################################
-# 5️⃣ CURVE FUNCTION (UNCHANGED)
+# 6️⃣ CURVE FUNCTION
 ###############################################################
 
 make_curve <- function(sx, sy, tx, ty, n = 40, bend = 0.3) {
@@ -183,7 +256,7 @@ make_curve <- function(sx, sy, tx, ty, n = 40, bend = 0.3) {
 }
 
 ###############################################################
-# 6️⃣ UI
+# 7️⃣ UI
 ###############################################################
 
 ui <- fluidPage(
@@ -245,7 +318,7 @@ ui <- fluidPage(
 )
 
 ###############################################################
-# 7️⃣ SERVER
+# 8️⃣ SERVER
 ###############################################################
 
 server <- function(input, output, session) {
@@ -326,7 +399,7 @@ server <- function(input, output, session) {
 }
 
 ###############################################################
-# 8️⃣ RUN APP
+# 9️⃣ RUN APP
 ###############################################################
 
 shinyApp(ui, server)
