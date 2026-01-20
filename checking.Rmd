@@ -3,10 +3,16 @@ title: "Checking stuff"
 output: html_notebook
 ---
 
-
 ```{r}
 
 
+library(data.table)
+
+long=fread("C:\\Users\\rmartin7\\OneDrive - WBG\\projects\\PRINZGlobal\\imperial_college_visualization\\01_data\\long_final.csv")
+
+library(fst)
+write_fst(long, "C:\\Users\\rmartin7\\OneDrive - Imperial College London\\inglobe\\data\\long_final.fst",
+          compress=100)
 
 
 ```
