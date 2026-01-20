@@ -280,7 +280,7 @@ ui <- fluidPage(
                "Individual Countries" = sort(unique(df$sce_country))
              ),
              multiple = TRUE,
-             selected = "All countries"
+             selected = "Africa"
            )
     ),
     column(6,
