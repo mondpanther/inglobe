@@ -10,7 +10,7 @@ This notebook prepares the
 ```{r}
 
 library(dplyr)
-
+library(arrow)
 ```
 
 
@@ -153,6 +153,9 @@ if (!file.exists(filen)) {
   ISEAPP_PATH_LOCAL="C:/Users/rmartin7/OneDrive - WBG/Apps/iseapp"
   write_fst(df,paste0(ISEAPP_PATH_LOCAL,"first_appli.fst"),compress=100)
   
+  
+  pat2009t2018=df %>% filter(appln_filing_year>=2009 & appln_filing_year<=2018)
+  pat2009t2018=pat2009t2018 %>% select(docdb_family_id)
 
 ```
 
@@ -255,7 +258,31 @@ holderORinventor=holder_countries %>% mutate(type="holder") %>%
   rename(iso2=person_ctry_code) %>% 
   inner_join(country_income)
 
+test=holderORinventor %>% inner_join(pat2009t2018) %>% group_by(iso2,type) %>% summarize(n()) 
 
+test2=test %>% filter(iso2=="NA")
+```
+
+
+# Build countrymap from first principles
+```{r}
+
+countrymapnew=df %>% filter(appln_filing_year>=2009 & appln_filing_year<=2018) %>% 
+  select(docdb_family_id) %>% 
+  inner_join(holderORinventor %>% filter(type=="inventor")) %>% 
+  rename(ctry_code=iso2) %>% select(ctry_code,docdb_family_id,type)
+
+test =countrymapnew %>% group_by(ctry_code) %>% summarize(nn=n())
+istraxglobal= read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/istrax_global.fst"))
+
+test2=istraxglobal %>% inner_join(countrymapnew) %>% group_by(ctry_code) %>% summarise(n())
+
+
+```
+
+
+# Carry on...
+```{r}
 library(collapse)
 
 hicinno <- holderORinventor %>%
@@ -277,7 +304,7 @@ hicinno %>% filter(ncountries==1
 
 getwd()
 library(fst)
-countrymap <- read_fst("../iseapp/countrymap.fst")
+countrymap <- read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/countrymap.fst"))
 #for (ff in files) {
 #  patchar_countrymap <- patchar_countrymap %>% left_join(read_parquet(ff))
 #}
@@ -296,10 +323,10 @@ greenictid=techmap %>% filter(technology=="Any battery technology") %>% distinct
 
 
 
-istraxglobal= read_fst("../iseapp/istraxes/istrax_global.fst")
-istraxemdeexcn= read_fst("../iseapp/istraxes/istrax_emdenocn.fst")
-istraxnational= read_fst("../iseapp/istraxes/istrax_nationalkey_2009_2018.fst")
-evglobal=read_fst("../iseapp/istraxes/ev_global.fst")
+istraxglobal= read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/istrax_global.fst"))
+istraxemdeexcn= read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/istrax_emdenocn.fst"))
+istraxnational= read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/istrax_nationalkey_2009_2018.fst"))
+evglobal=read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/ev_global.fst"))
 #bigX=countrymap %>% inner_join(hicinno) %>% inner_join(istraxglobal)
 
 
@@ -1640,14 +1667,18 @@ anti=anti %>% select(-nn,-rr)
 
 dfnew=anti %>% bind_rows(lat_longs_mapbox) %>% select(person_id, person_ctry_code,longitude,latitude)
 
+```
 
 
+#Saving best guess so far
+
+```{r}
 write_parquet(dfnew,paste0(localbig,"\\data\\dfnew.parquet"))
 
 
-
-
 ```
+
+
 
 ### fuzzy matching of address strings
 
@@ -1983,3 +2014,6 @@ rm(dfnew)
 inv_hold = inv_hold %>% inner_dfnew()
 
 ```
+
+
+
