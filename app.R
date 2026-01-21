@@ -406,8 +406,8 @@ server <- function(input, output, session) {
         lng = curve_pts$lon,
         lat = curve_pts$lat,
         color = this_color,
-        weight = 2.5,
-        opacity = 1
+        weight = 1,
+        opacity = 0.4
       )
     }
   })
