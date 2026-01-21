@@ -259,9 +259,12 @@ make_curve <- function(sx, sy, tx, ty, n = 40, bend = 0.3) {
 # 7️⃣ UI
 ###############################################################
 
-ui <- fluidPage(
-  
+ui <- function(request) {
+  fluidPage(
+
   titlePanel("Patent Propagation Mapping Tool"),
+
+  bookmarkButton(),
   
   bsCollapse(
     bsCollapsePanel(
@@ -315,14 +318,21 @@ ui <- fluidPage(
            )
     )
   )
-)
+)}
 
 ###############################################################
 # 8️⃣ SERVER
 ###############################################################
 
 server <- function(input, output, session) {
-  
+
+  # Automatically update URL as inputs change
+  observe({
+    reactiveValuesToList(input)
+    session$doBookmark()
+  })
+  onBookmarked(updateQueryString)
+
   edges_filtered <- reactive({
     
     selected_countries <- expand_country_selection(input$sce_country)
@@ -402,4 +412,4 @@ server <- function(input, output, session) {
 # 9️⃣ RUN APP
 ###############################################################
 
-shinyApp(ui, server)
+shinyApp(ui, server, enableBookmarking = "url")
