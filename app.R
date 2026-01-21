@@ -82,14 +82,19 @@ localpath_fname <- function(fname) {
 # 2️⃣ LOAD DATA
 ###############################################################
 
-# Load long_final from local Dropbox or online
-pp <- localpath_fname("data/long_final.fst")
-if (file.exists(pp)) {
-  df_raw <- read_fst(pp)
-  message("Loaded long_final.fst locally: ", nrow(df_raw), " rows")
+# Load long_final: check bundled file first, then local Dropbox, then online
+bundled_path <- "data/long_final.fst"
+dropbox_local_path <- localpath_fname("data/long_final.fst")
+
+if (file.exists(bundled_path)) {
+  df_raw <- read_fst(bundled_path)
+  message("Loaded long_final.fst from bundled data: ", nrow(df_raw), " rows")
+} else if (file.exists(dropbox_local_path)) {
+  df_raw <- read_fst(dropbox_local_path)
+  message("Loaded long_final.fst from local Dropbox: ", nrow(df_raw), " rows")
 } else {
   df_raw <- dropbox_read_fst("/inglobe/data/long_final.fst")
-  message("Loaded long_final.fst from Dropbox: ", nrow(df_raw), " rows")
+  message("Loaded long_final.fst from online Dropbox: ", nrow(df_raw), " rows")
 }
 
 df <- df_raw %>%
