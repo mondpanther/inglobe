@@ -82,14 +82,19 @@ localpath_fname <- function(fname) {
 # 2️⃣ LOAD DATA
 ###############################################################
 
-# Load long_final from local Dropbox or online
-pp <- localpath_fname("data/long_final.fst")
-if (file.exists(pp)) {
-  df_raw <- read_fst(pp)
-  message("Loaded long_final.fst locally: ", nrow(df_raw), " rows")
+# Load long_final: check bundled file first, then local Dropbox, then online
+bundled_path <- "data/long_final.fst"
+dropbox_local_path <- localpath_fname("data/long_final.fst")
+
+if (file.exists(bundled_path)) {
+  df_raw <- read_fst(bundled_path)
+  message("Loaded long_final.fst from bundled data: ", nrow(df_raw), " rows")
+} else if (file.exists(dropbox_local_path)) {
+  df_raw <- read_fst(dropbox_local_path)
+  message("Loaded long_final.fst from local Dropbox: ", nrow(df_raw), " rows")
 } else {
   df_raw <- dropbox_read_fst("/inglobe/data/long_final.fst")
-  message("Loaded long_final.fst from Dropbox: ", nrow(df_raw), " rows")
+  message("Loaded long_final.fst from online Dropbox: ", nrow(df_raw), " rows")
 }
 
 df <- df_raw %>%
@@ -259,9 +264,12 @@ make_curve <- function(sx, sy, tx, ty, n = 40, bend = 0.3) {
 # 7️⃣ UI
 ###############################################################
 
-ui <- fluidPage(
-  
+ui <- function(request) {
+  fluidPage(
+
   titlePanel("Patent Propagation Mapping Tool"),
+
+  bookmarkButton(),
   
   bsCollapse(
     bsCollapsePanel(
@@ -315,14 +323,21 @@ ui <- fluidPage(
            )
     )
   )
-)
+)}
 
 ###############################################################
 # 8️⃣ SERVER
 ###############################################################
 
 server <- function(input, output, session) {
-  
+
+  # Automatically update URL as inputs change
+  observe({
+    reactiveValuesToList(input)
+    session$doBookmark()
+  })
+  onBookmarked(updateQueryString)
+
   edges_filtered <- reactive({
     
     selected_countries <- expand_country_selection(input$sce_country)
@@ -391,8 +406,8 @@ server <- function(input, output, session) {
         lng = curve_pts$lon,
         lat = curve_pts$lat,
         color = this_color,
-        weight = 2.5,
-        opacity = 1
+        weight = 1,
+        opacity = 0.4
       )
     }
   })
@@ -402,4 +417,4 @@ server <- function(input, output, session) {
 # 9️⃣ RUN APP
 ###############################################################
 
-shinyApp(ui, server)
+shinyApp(ui, server, enableBookmarking = "url")
