@@ -1,45 +1,30 @@
 ---
-title: "Prepare various bits of data"
+title: "Prepare persons data"
 output: html_notebook
 ---
 
 This notebook prepares the 
-- locational data for patents
 - person/firm level identifiers
 
 ```{r}
 
 library(dplyr)
 library(arrow)
+
 ```
 
-
+  f
 
 
 ```{r}
 
+source("find_dropbox.R")
 
+dropbox_root <- get_dropbox_path()  # works for personal and enterprise Dropbox
+if (is.null(dropbox_root)) stop("Dropbox folder not found. Is Dropbox installed?")
+message("Dropbox root: ", dropbox_root)
 
-if (Sys.info()["nodename"] == "PCACL-9RVSQ74") {
-  datad="C:\\Users\\rmartin7\\OneDrive - WBG\\projects\\PRINZGlobal\\imperial_college_visualization\\01_data"
-  localbig="C:\\Users\\rmartin7\\OneDrive - Imperial College London\\inglobe"
-  localbigwb="C:\\Users\\rmartin7\\OneDrive - WBG\\projects\\inglobe"
-}
-
-```
-
-
-# Load data
-
-```{r,eval=FALSE}
-
-
-
-
-cites=read_tsv(paste0(datad,"\\citenet_noself"))
-
-
-
+inglobebig=paste0(dropbox_root,"\\Apps\\iseapp\\inglobe")
 
 ```
 
@@ -60,7 +45,7 @@ The main purpose of the exercise is now to get map points that are reasonable wi
 ### get address data from bigquery unless already stored locally....
 
 ```{r}
-personfile=paste0(localbig,"\\data\\person_address.parquet")
+personfile=paste0(inglobebig,"\\person_address.parquet")
 if (!file.exists(personfile)) {
   library(bigrquery)
   library(DBI)
@@ -77,15 +62,43 @@ if (!file.exists(personfile)) {
   df <- bq_table_download(
     bq_table(project_id, dataset, table)
   )
-  
-  
   library(arrow)
   write_parquet(df,personfile)
 }
 
-df=read_parquet(personfile)
+persons_address=read_parquet(personfile)
+head(persons)
 
 ```
+
+
+```{r}
+filen=paste0(inglobebig,"\\persons.parquet")
+if (!file.exists(filen)) {
+  library(bigrquery)
+  library(DBI)
+  
+  # Set your project ID
+  project_id <- "patbis"
+  
+  # Option 1: Direct table download
+  # Specify dataset and table name
+  dataset <- "fromPATSTAT2021"
+  table   <- "tls206_person"
+  
+  # Download the entire table
+  df <- bq_table_download(
+    bq_table(project_id, dataset, table)
+  )
+  library(arrow)
+  write_parquet(df,filen)
+}
+
+persons=read_parquet(filen)
+head(persons)
+
+```
+
 
 
 
@@ -95,7 +108,7 @@ df=read_parquet(personfile)
 
 library(fst)
 
-filen=paste0(localbigwb,"\\data\\appln_docdb.fst")
+filen=paste0(inglobebig,"\\data\\appln_docdb.fst")
 if (!file.exists(filen)) {
   library(bigrquery)
   library(DBI)
