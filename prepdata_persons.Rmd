@@ -13,7 +13,6 @@ library(arrow)
 
 ```
 
-  f
 
 
 ```{r}
@@ -28,18 +27,6 @@ inglobebig=paste0(dropbox_root,"\\Apps\\iseapp\\inglobe")
 
 ```
 
-
-
-
-## condensed address data...
-
-We are working out the exact location for a sample of firms. This exploits cheap/free usage of APIs.
-Specifically, the mapbox API allows 100k free calls per month.
-We use the exactly matched address strings to assign an approximate address to the remaining persons in the 
-patent data. 
-Specifically, we assign a random location of the found addresses in the same country to all addresses with country information.
-Note that this could be greatly refined in future work; e.g. predict the likely location use features such as sector etc.
-The main purpose of the exercise is now to get map points that are reasonable within specific countries.
 
 
 ### get address data from bigquery unless already stored locally....
@@ -67,29 +54,35 @@ if (!file.exists(personfile)) {
 }
 
 persons_address=read_parquet(personfile)
-head(persons)
+head(persons_address)
 
 ```
-
+# Get the persons data..
 
 ```{r}
 filen=paste0(inglobebig,"\\persons.parquet")
 if (!file.exists(filen)) {
   library(bigrquery)
   library(DBI)
-  
+
   # Set your project ID
   project_id <- "patbis"
-  
-  # Option 1: Direct table download
-  # Specify dataset and table name
-  dataset <- "fromPATSTAT2021"
-  table   <- "tls206_person"
-  
-  # Download the entire table
-  df <- bq_table_download(
-    bq_table(project_id, dataset, table)
-  )
+
+  # Download selected columns from tls206_person
+  sql <- "
+    SELECT
+      person_id,
+      person_name,
+      person_ctry_code,
+      psn_name,
+      han_name,
+      psn_sector
+    FROM `patbis.fromPATSTAT2021.tls206_person`
+  "
+
+  tb <- bq_project_query(project_id, sql)
+  df <- bq_table_download(tb)
+
   library(arrow)
   write_parquet(df,filen)
 }
@@ -99,7 +92,39 @@ head(persons)
 
 ```
 
+### Get top 100 technology companies by R&D spending (EU Industrial R&D Investment Scoreboard)
 
+```{r}
+library(readxl)
+library(dplyr)
+library(arrow)
+
+top100file <- paste0(inglobebig, "\\top100_rd.parquet")
+if (!file.exists(top100file)) {
+  # Download the 2025 EU Industrial R&D Investment Scoreboard (World 2000)
+  # Source: https://iri.jrc.ec.europa.eu/scoreboard/2025-eu-industrial-rd-investment-scoreboard
+  scoreboard_url <- "https://iri.jrc.ec.europa.eu/sites/default/files/contentype/scoreboard/2025-12/SB2025_World2000_2.xlsx"
+
+  tmpfile <- tempfile(fileext = ".xlsx")
+  download.file(scoreboard_url, tmpfile, mode = "wb")
+
+  # Read the excel file
+  sb <- read_excel(tmpfile, sheet = 1)
+  unlink(tmpfile)
+
+  message("Columns: ", paste(names(sb), collapse = ", "))
+
+  write_parquet(sb, top100file)
+}
+
+top_rd <- read_parquet(top100file)
+head(top_rd)
+
+
+
+
+
+```
 
 
 ### get docdb and application id
@@ -163,7 +188,7 @@ if (!file.exists(filen)) {
   df <- df[order(docdb_family_id, appln_filing_year), .SD[1], by = docdb_family_id]
   
   
-  ISEAPP_PATH_LOCAL="C:/Users/rmartin7/OneDrive - WBG/Apps/iseapp"
+  ISEAPP_PATH_LOCAL=paste0(dropbox_root,"\\Apps\\iseapp\\")
   write_fst(df,paste0(ISEAPP_PATH_LOCAL,"first_appli.fst"),compress=100)
   
   
@@ -176,37 +201,8 @@ if (!file.exists(filen)) {
 ## Get person data
 
 ```{r}
-## Inventors
-inventorfile=paste0(localbig,"\\data\\inventors.parquet")
-if (!file.exists(inventorfile)) {
-  library(bigrquery)
-  library(DBI)
-  
-  # Set your project ID
-  project_id <- "patbis"
-  
-  # Option 1: Direct table download
-  # Specify dataset and table name
-  dataset <- "inglobe"
-  table <- "inventors"
-  
-  # Download the entire table
-  inventors <- bq_table_download(
-    bq_table(project_id, dataset, table)
-  )
-  
-  
-  library(arrow)
-  write_parquet(inventors,inventorfile)
-}
 
 
-
-
-
-
-
-# Set your project ID
 project_id <- "patbis"
 dataset <- "inglobe"
 
@@ -217,7 +213,7 @@ tables_to_download <- c( "holders","inventors",  "inventor_countries", "holder_c
 for (table in tables_to_download) {
   #table="holders"
   # Create local filename
-  local_file <- paste0(localbig, "\\data\\", table, ".parquet")
+  local_file <- paste0(inglobebig, "\\data\\", table, ".parquet")
   
   # Check if file already exists
   if (!file.exists(local_file)) {
@@ -241,6 +237,10 @@ for (table in tables_to_download) {
 
 
 
+
+
+
+
 ### a little check.... are high value patents MNE ones?
 
 ```{r}
@@ -251,7 +251,7 @@ tables_to_read <- c("inventors","holders", "inventor_countries", "holder_countri
 # Loop through each table and read into a dataframe
 for (table in tables_to_read) {
   # Create filename
-  local_file <- paste0(localbig, "\\data\\", table, ".parquet")
+  local_file <- paste0(inglobebig, "\\data\\", table, ".parquet")
   
   # Read parquet file and assign to variable with table name
   if (file.exists(local_file)) {
@@ -276,1757 +276,551 @@ test=holderORinventor %>% inner_join(pat2009t2018) %>% group_by(iso2,type) %>% s
 test2=test %>% filter(iso2=="NA")
 ```
 
-
-# Build countrymap from first principles
-```{r}
-
-countrymapnew=df %>% filter(appln_filing_year>=2009 & appln_filing_year<=2018) %>% 
-  select(docdb_family_id) %>% 
-  inner_join(holderORinventor %>% filter(type=="inventor")) %>% 
-  rename(ctry_code=iso2) %>% select(ctry_code,docdb_family_id,type)
-
-test =countrymapnew %>% group_by(ctry_code) %>% summarize(nn=n())
-istraxglobal= read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/istrax_global.fst"))
-
-test2=istraxglobal %>% inner_join(countrymapnew) %>% group_by(ctry_code) %>% summarise(n())
-
-
-```
-
-
-# Carry on...
-```{r}
-library(collapse)
-
-hicinno <- holderORinventor %>%
-  fgroup_by(docdb_family_id) %>%
-  fsummarise(
-    JPinno=fmax(iso2=="JP"),
-    ncountries = fndistinct(iso2), 
-    hicinno = fmax(HIC),
-    hicinnoUS = fmax(iso2 == "US"),
-    CNinno=fmax(iso2=="CN"),
-    hicinnoEurope = fmax(iso2 %in% hiceurope),
-    multi = fndistinct(iso2) > 1,
-    hicinventor = fmax(HIC * (type == "inventor")),
-    hicholder = fmax(HIC   * (type == "holder"))
-  )
-
-hicinno %>% filter(ncountries==1
-                   ) %>% nrow()
-
-getwd()
-library(fst)
-countrymap <- read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/countrymap.fst"))
-#for (ff in files) {
-#  patchar_countrymap <- patchar_countrymap %>% left_join(read_parquet(ff))
-#}
-
-
-techmap <- read_fst("../iseapp/techmap.fst")
-test=techmap %>% distinct(technology)
-greenid = techmap   %>% filter(technology=="Any Green technology") %>% distinct() %>% 
-  select(-technology) %>% mutate(greenid=1)
-
-batteryid = techmap %>% filter(technology=="Green ICT") %>% distinct() %>% 
-  select(-technology) %>% mutate(greenictid=1)
-
-greenictid=techmap %>% filter(technology=="Any battery technology") %>% distinct() %>% 
-  select(-technology) %>% mutate(batteryid=1)
-
-
-
-istraxglobal= read_fst(ISEAPP_PATH_LOCAL   %>% paste0(.,"/istraxes/istrax_global.fst"))
-istraxemdeexcn= read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/istrax_emdenocn.fst"))
-istraxnational= read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/istrax_nationalkey_2009_2018.fst"))
-evglobal=read_fst(ISEAPP_PATH_LOCAL        %>% paste0(.,"/istraxes/ev_global.fst"))
-#bigX=countrymap %>% inner_join(hicinno) %>% inner_join(istraxglobal)
-
-
-#bigX=countrymap %>% inner_join(hicinno) %>% 
-#   inner_join(istraxglobal) %>%
-#   #inner_join(istraxemdeexcn) %>% 
-#   inner_join(evglobal) %>% 
-#   inner_join(istraxnational) %>% 
-#   rename(iso2=ctry_code) %>% 
-#   inner_join(country_income)%>% mutate(CNid=iso2=="CN") %>% left_join(greenid) %>% 
-   #mutate(anygreen=!is.na(technology))
-
-
-bigX=countrymap %>% left_join(hicinno) %>% 
-   inner_join(istraxglobal) %>%
-   inner_join(istraxemdeexcn) %>% 
-   inner_join(istraxnational) %>%
-   inner_join(evglobal) %>% 
-   rename(iso2=ctry_code) %>% 
-   inner_join(country_income)%>% mutate(CNid=iso2=="CN") %>% 
-   left_join(greenid) %>% 
-   left_join(batteryid) %>% left_join(greenictid)
-
-
-bigX=bigX %>%   mutate(across(c(batteryid, greenid, greenictid), ~replace_na(., 0)))
-bigX=bigX %>%   mutate(across(c(ncountries), ~replace_na(., 1)))
-
-bigX=bigX %>%   mutate(across(c(multi), ~replace_na(., FALSE)))
-bigX=bigX %>%   mutate(across(c(JPinno,
-                                starts_with("hicinno"),
-                                CNinno,hicinventor,hicholder), ~replace_na(., 0)))
-
-
-bigX=bigX %>% rename(istrax_nat=istrax_nationalkey_2009_2018)
-
-bigX %>% filter(is.na(hicinno)) %>% nrow()
-head(hicinno)
-head(bigX)
-```
-
-
-## now do regressions
-```{r}
-library(fixest)
-feols(istrax_global ~ hicinno+hicinnoUS+hicinnoEurope+multi,
-      bigX %>% filter(CNid==1))
-nrow(bigX %>% filter(CNid==1))
-mean(bigX %>% filter(CNid==1) %>% pull(ev_global))
-mean(bigX %>% filter(HIC==1) %>% pull(ev_global))
-
-
-feols(istrax_global ~ hicinno+hicinnoUS+hicinnoEurope+multi+CNinno+JPinno+ncountries,
-      bigX %>% filter(HIC==0&CNid==0))
-
-
-
-
-feols(istrax_global ~ ncountries+hicinno,
-      bigX %>% filter(HIC==0&CNid==0))
-
-
-
-feols(istrax_nationalkey_2009_2018 ~ ncountries+hicinno,
-      bigX %>% filter(HIC==0&CNid==0))
-
-```
-
-
-### Accounting for the battery return gapss
-```{r}
-
-
-feols(istrax_global ~ batteryid  + greenictid
-    
-     , bigX %>% filter(HIC==0&CNid==0&iso2!="VN"))
-```
-
-```{r}
-bigX=bigX %>% mutate(VNid=iso2=="VN")
-
-bigX=bigX %>% mutate(VNid=iso2=="VN")
-feols(istrax_global ~0+ batteryid+batteryid:VNid  + greenictid+greenictid:VNid
-      
-     , bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
-
-
-
-feols(istrax_global ~ 0+batteryid+ batteryid:VNid +greenictid+greenictid:VNid
-    #  +ncountries+multi 
-     , bigX %>% filter(HIC==0&CNid==0))
-
-
-
-
-feols(istrax_global ~  VNid 
-    #  +ncountries+multi 
-     , bigX %>% filter((HIC==0&CNid==0) &batteryid==1))
-
-
-feols(istrax_global ~  VNid 
-      +ncountries+multi+hicinno 
-     , bigX %>% filter(HIC==0&CNid==0&batteryid==1))
-
-
-bigX %>% filter(HIC==0&CNid==0&iso2=="VN"&batteryid==1) %>% nrow()
-
-```
-
+#### focus on holders only
 
 ```{r}
 
-feols(istrax_EMDENOCN ~ hicinno+hicinnoUS+hicinnoEurope+multi+CNinno,
-      bigX %>% filter(HIC==0&CNid==0))
-
-feols(istrax_nationalkey_2009_2018 ~ hicinno+hicinnoUS+hicinnoEurope+multi,
-      bigX %>% filter(HIC==0&CNid==0))
-
-############ now focus on green only
-
-feols(istrax_global ~ hicinno+hicinnoUS+hicinnoEurope+ncountries+multi,
-      bigX %>% filter(HIC==0&CNid==0))
-
-feols(istrax_EMDEexCN ~ hicinno+hicinnoUS+hicinnoEurope+multi,
-      bigX %>% filter(HIC==0&CNid==0&anygreen==T))
-
-feols(istrax_nationalkey_2009_2018 ~ hicinno+hicinnoUS+hicinnoEurope+multi,
-      bigX %>% filter(HIC==0&CNid==0&anygreen==T))
-
-############## now with interaction
-
-feols(istrax_global ~ hicinno*anygreen+
-                      hicinnoUS*anygreen+
-                      hicinnoEurope*anygreen+
-                      multi*anygreen,
-      bigX %>% filter(HIC==0&CNid==0))
-
-
-
-feols(istrax_EMDEexCN ~ hicinno*anygreen+
-                      hicinnoUS*anygreen+
-                      hicinnoEurope*anygreen+
-                      multi*anygreen,
-      bigX %>% filter(HIC==0&CNid==0))
-
-########## simpler; i.e. drop europe us
-
-feols(istrax_global ~ hicinno*anygreen+multi*anygreen,
-                      
-      bigX %>% filter(HIC==0&CNid==0))
-
-
-
-feols(istrax_EMDEexCN ~ hicinno*anygreen+multi*anygreen,
-                      
-      bigX %>% filter(HIC==0&CNid==0))
-```
-
-
-
-### battery in Vietnam vs RoW...
-
-```{r}
-
-battery_classes=c("Battery Technology", "Lithium Extraction & Processing", 
-                  "Graphite & Carbon Materials", "Cathode Materials", "Anode Materials",
-                  "Electrolytes & Additives", "Separators", "Battery Cell Design & Assembly",
-                  "Battery Management Systems (BMS)", 
-                  "Electric Vehicles & Mobility", "Battery Recycling & Recovery")
-
-
-#batterymap=techmap %>% filter(technology %in% battery_classes) 
-
-bcmap=countrymap %>% rename(iso2=ctry_code) %>% inner_join(country_income) %>% 
-  inner_join(techmap %>% filter(technology %in% battery_classes) ) %>% 
-  filter(HIC==0 & iso2!="CN") %>% 
-  mutate(countrycats=ifelse(iso2 %in% c("CN","VN"),iso2,
-                                ifelse(HIC==0,"other LMIC","HIC")))
-
-abcmap=bcmap %>% group_by(technology, countrycats) %>% summarize(share=n()) %>%
-  group_by(countrycats) %>% 
-  mutate( share=share/ sum(share) )
-
-abcmap %>% 
-  ggplot(aes(x = technology, y = share, fill = countrycats)) + 
-  geom_col(position = "dodge") + 
-  scale_x_discrete(limits = rev) +
-  labs(
-    x = "Technology", 
-    y = "Share", 
-    fill = "Country Category"
-  ) + 
-  theme_minimal() + 
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
+holders_persons=holders %>% distinct(person_id) %>% inner_join(persons)
 
 
 
 ```
 
+### Match EU R&D Scoreboard companies to PATSTAT person_ids
 
+**Workflow overview:**
 
-### pie charts
+1. Use the OpenAI API to generate known aliases, subsidiaries, and former
+   names for each of the ~2000 scoreboard companies. This creates an
+   expanded alias table (e.g. ALPHABET → GOOGLE, META → FACEBOOK).
+2. Upload the alias table to BigQuery.
+3. Match aliases against PATSTAT `han_name` using exact match on cleaned
+   names + `EDIT_DISTANCE` for close variants.
+4. Expand matched `han_id` → `person_id`, restricted to holders.
+5. Download and cache the final mapping locally.
+
+#### Step 1: Generate company aliases via OpenAI
 
 ```{r}
-
-
-library(plotly)
+library(httr2)
+library(jsonlite)
 library(dplyr)
+library(stringr)
+library(arrow)
 
-# Create summary
+aliasfile <- paste0(inglobebig, "\\scoreboard_aliases.parquet")
 
-collab_summary <- bigX %>%  filter(HIC==0&CNid==0 & !(hicinno == 1 & multi == 0 ) ) %>% 
-  count(hicinno, multi) %>%
-  mutate(category = case_when(
-    hicinno == 1 & multi == 1 ~ "HIC & International",
-    hicinno == 1 & multi == 0 ~ "HIC Only",
-    hicinno == 0 & multi == 1 ~ "International Only",
-    hicinno == 0 & multi == 0 ~ "No Collaboration"
-  ))
+if (!file.exists(aliasfile)) {
 
-# Create interactive pie chart
-plot_ly(collab_summary, 
-        labels = ~category, 
-        values = ~n, 
-        type = 'pie',
-        textinfo = 'label+percent+value',
-        hoverinfo = 'text',
-        text = ~paste('Count:', n)) %>%
-  layout(title = 'Distribution of Collaboration Types')
+  api_key <- Sys.getenv("OPENAI_API_KEY")
+  if (nchar(api_key) == 0) stop("Set OPENAI_API_KEY in .Renviron and restart R")
 
-```
+  companies <- top_rd %>% pull(Company) %>% unique()
 
+  # Process in batches of 20 to keep prompt + response manageable
+  batch_size <- 20
+  batches    <- split(companies, ceiling(seq_along(companies) / batch_size))
 
-#### Vietnam only...
+  all_aliases <- list()
 
-```{r}
+  for (i in seq_along(batches)) {
+    batch <- batches[[i]]
+    message("Processing batch ", i, " / ", length(batches),
+            " (", length(batch), " companies)")
 
+    company_list <- paste(batch, collapse = "\n")
 
-bigX %>% filter(HIC==0&CNid==0) %>% group_by(batteryid,greenictid) %>% 
-  summarize(across(c(ncountries,hicinno,istrax_global,istrax_EMDENOCN,istrax_nationalkey_2009_2018),mean))
-
-
-bigX %>% filter(HIC==0&CNid==0&iso2=="VN") %>% group_by(batteryid,greenictid) %>% 
-  summarize(across(c(ncountries,hicinno,istrax_global,istrax_EMDENOCN,istrax_nationalkey_2009_2018),mean))
-
-
-
-```
-
-
-## figure for the number of countries effect....
-```{r}
-  bigX %>% filter(HIC==0&CNid==0) %>% 
-      ggplot(aes(x=ncountries,y=istrax_global))+
-      geom_point()+geom_smooth(method="lm")
-
-
-
-```
-
-
-```{r}
-
-library(tidyverse)
-
-ncolab=function(outcome="istrax_global",bigX){
-# Create summary data
-summary_data <- bigX %>% 
-  filter(HIC==0 & CNid==0) %>%
-  mutate(ncountries=ifelse(ncountries>5,5,ncountries)) %>% 
-  group_by(ncountries) %>%
-  summarise(
-    mean_istrax = mean(!!sym(outcome), na.rm=TRUE),
-    n = n(),
-    sd = sd(!!sym(outcome), na.rm=TRUE),
-    se = sd / sqrt(n),
-    ci_lower = mean_istrax - 1.96 * se,  # 95% confidence interval
-    ci_upper = mean_istrax + 1.96 * se
-  ) %>%
-  mutate(width_prop = (n / max(n)))  # Proportional width (0 to 1)
-
-# Create plot
-summary_data %>%
-  ggplot(aes(x=ncountries, y=mean_istrax)) +
-  geom_col(aes(width=width_prop), fill="steelblue", alpha=0.7) +
-  geom_errorbar(aes(ymin=ci_lower, ymax=ci_upper), 
-                width=0.2, color="black") +
-  labs(x = "Number of Countries",
-       y = "Spillover Return in %",
-       title = "Mean Collaboration by Number of colaborating Countries") +
-  theme_minimal()
-}
-
-
-#bigX=bigX %>% rename(istrax_nat=istrax_nationalkey_2009_2018)
-ncolab(outcome="istrax_global",bigX=bigX)+
-  ggtitle("International collaborators and marginal returns to innovation")+
-  xlab("Number of collaborating countries")
-
-ncolab(outcome="istrax_global",bigX=bigX %>% filter(hicinnoUS==1))+
-  ggtitle("International collaborators and marginal returns to innovation")+
-  xlab("Number of collaborating countries")
-
-
-
-ncolab(outcome="istrax_nat",bigX=bigX)+
-  ggtitle("International collaborators and marginal natrional returns to innovation")+
-    xlab("Number of collaborating countries")
-
-
-
-
-
-```
-
-
-
-```{r}
-
-bigXfilter=bigX %>% 
-  filter(HIC==0 & CNid==0) %>%mutate(countrycats=ifelse(iso2 %in% c("VN"),iso2,"other"),
-                                     techcats=         case_when(
-   batteryid==1  ~ "Battery",
-   greenictid==1  ~ "Green ICT ",
-   batteryid*greenictid==0 ~ "Other"
-  ))
-
-
-
-
-```
-
-
-
-```{r}
-
-library(tidyverse)
-
-bigXfilter <- bigX %>% 
-  filter(HIC==0 & CNid==0) %>%
-  mutate(
-    countrycats = ifelse(iso2 %in% c("VN"), iso2, "other"),
-    techcats = case_when(
-      batteryid==1 ~ "Battery",
-      greenictid==1 ~ "Green ICT",
-      batteryid*greenictid==0 ~ "Other"
+    prompt <- paste0(
+      "For each company listed below, provide ALL known names that this ",
+      "company might appear under in patent filings. Include:\n",
+      "- The company name itself\n",
+      "- Major subsidiaries that file patents\n",
+      "- Former names (e.g. FACEBOOK for META)\n",
+      "- Common abbreviations or trading names\n",
+      "- Regional variants (e.g. SAMSUNG ELECTRONICS, SAMSUNG SDI)\n\n",
+      "Return ONLY a JSON array of objects, each with:\n",
+      "  - \"company\": the original name exactly as given\n",
+      "  - \"aliases\": array of strings (patent filing names, UPPERCASE)\n\n",
+      "Do NOT include legal suffixes (Inc, Ltd, Corp, GmbH, etc.) in aliases.\n",
+      "Focus on names that would appear in patent databases.\n",
+      "Return valid JSON only, no markdown, no commentary.\n\n",
+      "Companies:\n", company_list
     )
-  )
 
-plot_data <- bigXfilter %>%
-  mutate(ncountries_capped = ifelse(ncountries >= 5, "5+", as.character(ncountries))) %>%
-  group_by(techcats, countrycats, ncountries_capped) %>%
-  summarise(n = n(), .groups = "drop") %>%
-  group_by(techcats, countrycats) %>%
-  mutate(share = n / sum(n))
-# Create stacked bar chart
-plot_data %>%
-  ggplot(aes(x = countrycats, y = share, fill = factor(ncountries_capped))) +
-  geom_col(position = "stack") +
-  facet_wrap(~techcats) +
-  scale_y_continuous(labels = scales::percent) +
-  labs(
-    x = "Country Category",
-    y = "Share of Observations",
-    fill = "Number of\nCountries",
-    title = "Distribution of Number of Collaborating Countries"
-  ) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-
-
-
-
-
-feols(istrax_global~batteryid+greenictid+hicinno+hicinnoUS+hicinnoEurope+ncountries+multi, bigXfilter %>% filter(iso2=="VN"))
-
-feols(istrax_global~batteryid+greenictid+ncountries, bigXfilter %>% filter(iso2=="VN"))
-
-feols(istrax_global~batteryid+greenictid, bigXfilter %>% filter(iso2=="VN"))
-
-feols(istrax_nat~batteryid+ncountries+greenictid| iso2, bigXfilter )
-
-
-```
-
-
-
-```{r}
-
-
-
-# Create summary with mean ncountries
-plot_data <- bigXfilter %>%
-  group_by(techcats, countrycats) %>%
-  summarise(
-    mean_ncountries = mean(ncountries, na.rm = TRUE),
-    n = n(),
-    .groups = "drop"
-  )
-
-# Create bar plot
-plot_data %>%
-  ggplot(aes(x = countrycats, y = mean_ncountries, fill = techcats)) +
-  geom_col(position = "dodge") +
-  labs(
-    x = "Country Category",
-    y = "Average Number of Countries",
-    fill = "Technology Category",
-    title = "Average Number of Collaborating Countries"
-  ) +
-  theme_minimal()
-
-```
-
-```{r}
-ncolab(outcome="istrax_global",bigX=bigX %>% filter(hicinno==1))
-
-
-ncolab(outcome="istrax_global",bigX=bigX %>% filter(iso2=="VN"))
-
-
-
-ncolab(outcome="istrax_global",bigX=bigX %>% filter(batteryid==1&iso2=="VN"))
-
-ncolab(outcome="istrax_global",bigX=bigX %>% filter(greenictid==1&iso2=="VN"))
-
-
-```
-
-```{r}
-feols(istrax_global ~               ncountries,
-      bigX %>% filter(HIC==0&CNid==0))
-
-
-
-feols(istrax_global ~               ncountries+hicinno+multi+hicinnoUS*hicinnoEurope,
-      bigX %>% filter(HIC==0&CNid==0))
-
-
-feols(istrax_nationalkey_2009_2018 ~               ncountries+hicinno,
-      bigX %>% filter(HIC==0&CNid==0))
-
-
-feols(istrax_global ~               ncountries+hicinno,
-      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
-
-
-feols(istrax_global ~               ncountries+hicinno+hicinnoUS+hicinnoEurope,
-      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
-
-
-
-feols(istrax_global ~               ncountries+hicinno+hicinnoUS+hicinnoEurope+multi,
-      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
-
-
-
-feols(istrax_nationalkey_2009_2018 ~ ncountries+hicinno+hicinnoUS+hicinnoEurope+multi,
-      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
-
-```
-
-```{r}
-
-
-piepie=function(title=""){
-#collab_summary <- bigXfilter %>%  filter(  !(hicinno == 1 & multi == 0 )) %>% 
-collab_counts <- bigXfilter %>%
-  filter(  !(hicinno == 1 & multi == 0 )) %>%  
-  filter(HIC==0&CNid==0 & !(hicinno == 1 & multi == 0)) %>%
-  
-  count(hicinno,hicinnoUS,hicinnoEurope, multi) %>%
- 
-  mutate(category = case_when(
-    hicinnoUS == 1     & multi == 1  ~ "US partner ",
-    hicinnoEurope == 1 & multi == 1  ~ "European partner ",
-    hicinno == 1       & hicinnoUS == 0 & hicinnoEurope==0 ~ "HIC other only",
-    hicinno == 0 & multi == 1 ~ "non HIC partner",
-    hicinno == 0 & multi == 0 ~ "No international Collaboration"
-  ),
-  percentage = round(n / sum(n) * 100, 1))
-
-  # Create donut chart
-  ggplot(collab_counts, aes(x = 2, y = n, fill = category)) +
-    geom_col(color = "white", linewidth = 1) +
-    coord_polar(theta = "y") +
-    xlim(c(0.5, 2.5)) +
-    geom_text(aes(label = paste0(n, "\n(", percentage, "%)")),
-              position = position_stack(vjust = 0.5),
-              size = 3.5, fontface = "bold") +
-    scale_fill_brewer(palette = "Set2", name = "Collaboration Type") +
-    labs(title = title) +
-    theme_void() +
-    theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
-
-
-}
-
-
-```
-
-
-
-
-```{r}
-
-bigXfilter=bigX  
-  # %>% filter(iso2=="VN")
-piepie("All LMIC innovation")
-
-#rm(batteryid)
-bigXfilter=bigX %>% filter( batteryid==1)
-piepie("Battery")
-
-
-#rm(batteryid)
-bigXfilter=bigX %>% filter( batteryid==1 & iso2=="VN")
-piepie("Battery")
-
-
-
-#rm(batteryid)
-bigXfilter=bigX %>% filter( greenictid==1)
-piepie("Green ICT")
-
-
-
-```
-
-hence green ict is more US dominated
-
-```{r}
-
-bigXfilter=bigX %>% filter(iso2=="VN")
-piepie("Vietnamese Innovators")
-
-
-#rm(batteryid)
-bigXfilter=bigX %>% filter(iso2=="VN" & batteryid==1)
-piepie("Vietnamese Battery Innovation")
-
-#rm(batteryid)
-bigXfilter=bigX %>% filter(iso2=="VN" & greenictid==1)
-piepie("Vietnamese Green ICT")
-
-```
-
-
-```{r}
-#rm(batteryid)
-bigXfilter=bigX %>% filter(iso2=="VN" & greenid==1)
-piepie()
-
-
-
-```
-
-## regressions....
-```{r}
-library(fixest)
-model=feols(istrax_global*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,#+hicholder+hicinventor,
-      bigX %>% filter(HIC==0&CNid==0))
-print(model)
-library(fixest)
-model=feols(istrax_nationalkey_2009_2018*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,
-      bigX %>% filter(HIC==0&CNid==0))
-print(model)
-
-```
-
-US multinationals are better..including for national returns...
-
-
-```{r}
-
-library(fixest)
-model=feols(istrax_global*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,#+hicholder+hicinventor,
-      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
-print(model)
-library(fixest)
-model=feols(istrax_nationalkey_2009_2018*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,
-      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"))
-print(model)
-
-```
-
-
-
-```{r}
-library(fixest)
-model=feols(istrax_global*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,#+hicholder+hicinventor,
-        
-      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"&batteryid==1))
-print(model)
-
-library(fixest)
-model=feols(istrax_nationalkey_2009_2018*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,
-
-      bigX %>% filter(HIC==0&CNid==0&iso2=="VN"&batteryid))
-print(model)
-
-
-
-
-```
-
-### donut
-
-```{r}
-
-library(ggplot2)
-library(dplyr)
-
-# Create summary
-collab_counts <- bigX %>%
-  filter(HIC==0&CNid==0 & !(hicinno == 1 & multi == 0)) %>% 
-  count(hicinno, multi) %>%
-  
-  mutate(category = case_when(
-    hicinno == 1 & multi == 1 ~ "HIC ",
-    hicinno == 1 & multi == 0 ~ "HIC Only",
-    hicinno == 0 & multi == 1 ~ "non HIC",
-    hicinno == 0 & multi == 0 ~ "No international Collaboration"
-  ),
-  percentage = round(n / sum(n) * 100, 1))
-
-# Create donut chart
-ggplot(collab_counts, aes(x = 2, y = n, fill = category)) +
-  geom_col(color = "white", linewidth = 1) +
-  coord_polar(theta = "y") +
-  xlim(c(0.5, 2.5)) +
-  geom_text(aes(label = paste0(n, "\n(", percentage, "%)")),
-            position = position_stack(vjust = 0.5),
-            size = 3.5, fontface = "bold") +
-  scale_fill_brewer(palette = "Set2", name = "Collaboration Type") +
-  labs(title = "Distribution of Collaboration Types") +
-  theme_void() +
-  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
-
-
-```
-
-### simple regressions
-
-```{r}
-############## no green
-
-
-
-library(fixest)
-model=feols(istrax_global*100 ~ hicinno+multi+hicinnoUS+hicinnoEurope,
-        
-      bigX %>% filter(CNid==1))
-print(model)
-
-
-
-model=feols(istrax_global*100 ~ #hicinno+multi
-           hicinno+multi+hicinnoUS+hicinnoEurope,
-        
-      bigX %>% filter(HIC==0&CNid==0))
-print(model)
-
-
-model=feols(istrax_nationalkey_2009_2018*100 ~ #hicinno+multi
-            hicinno+multi+hicinnoUS+hicinnoEurope,
-        
-      bigX %>% filter(HIC==0&CNid==0))
-print(model)
-
-
-```
-
-```{r}
-library(ggplot2)
-library(broom)
-
-# Extract and filter for specific variables
-coef_data <- tidy(model, conf.int = TRUE) %>%
-  filter(term %in% c("hicinno", "multiTRUE")) %>%
-  mutate(term = factor(term, levels = c("hicinno", "multiTRUE"),
-                       labels = c("HIC Collaboration", "International Collaboration")))
-
-# Create plot
-ggplot(coef_data, aes(x = term, y = estimate)) +
-  geom_col(aes(fill = term), alpha = 0.8) +
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
-                width = 0.25, linewidth = 1) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "gray30") +
-  scale_fill_manual(values = c("#2E86AB", "#A23B72")) +
-  labs(title = "Effect of Collaboration Type on Outcome",
-       x = NULL,
-       y = "External Value post per $100 invested") +
-  theme_minimal() +
-  theme(legend.position = "none",
-        text = element_text(size = 13),
-        axis.text = element_text(size = 12))
-
-
-
-##### only emede ex cn
-
-model=feols(istrax_EMDEexCN*100 ~ hicinno+multi,
-      bigX %>% filter(HIC==0&CNid==0))
-
-print(model)
-# Extract and filter for specific variables
-coef_data <- tidy(model, conf.int = TRUE) %>%
-  filter(term %in% c("hicinno", "multiTRUE")) %>%
-  mutate(term = factor(term, levels = c("hicinno", "multiTRUE"),
-                       labels = c("HIC Collaboration", "International Collaboration")))
-
-# Create plot
-ggplot(coef_data, aes(x = term, y = estimate)) +
-  geom_col(aes(fill = term), alpha = 0.8) +
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), 
-                width = 0.25, linewidth = 1) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "gray30") +
-  scale_fill_manual(values = c("#2E86AB", "#A23B72")) +
-  labs(title = "Effect of Collaboration Type on Outcome",
-       x = NULL,
-       y = "External Value post per $100 invested") +
-  theme_minimal() +
-  theme(legend.position = "none",
-        text = element_text(size = 13),
-        axis.text = element_text(size = 12))
-
-
-
-
-#####################################
-
-bigXaa=bigX %>% filter(HIC==0 & CNid==0) %>% group_by(hicinno,multi) %>% 
-  summarize(istraxmean=mean(istrax_global),
-            istraxp90=quantile(istrax_global, 0.90, na.rm = TRUE),
-            n()) 
-
-
-
-bigXa=bigX %>% group_by(HIC,hicinno,multi,CNid) %>% 
-  summarize(istraxmean=mean(istrax_global),
-            istraxp90=quantile(istrax_global, 0.90, na.rm = TRUE),
-            n()) %>% filter(!(HIC==1&hicinno==0))
-
-
-
-
-
-
-```
-
-
-
-```{r}
-
-plot_collab_returns <- function(data = bigX, 
-                                var, 
-                                filter_HIC = TRUE,
-                                filter_CNid = TRUE,
-                                exclude_HIC_only = TRUE,
-                                title = "Return by Collaboration Type",
-                                xlab = "Spillover return per $100 invested",
-                                multiply_by = 100,
-                                palette = "Set1",
-                                text_size = 3.5,
-                                label_size = 4) {
-  
-  var_enquo <- enquo(var)
-  
-  # Apply filters conditionally
-  filtered_data <- data
-  if (filter_HIC) filtered_data <- filtered_data %>% filter(HIC == 0)
-  if (filter_CNid) filtered_data <- filtered_data %>% filter(CNid == 0)
-  if (exclude_HIC_only) filtered_data <- filtered_data %>% filter(!(hicinno == 1 & multi == 0))
-  
-  # Prepare summary data
-  summary_data <- filtered_data %>%
-    mutate(collab_type = case_when(
-      hicinno == 1 & multi == 1 ~ "HIC & International",
-      hicinno == 1 & multi == 0 ~ "HIC Only",
-      hicinno == 0 & multi == 1 ~ "International Only",
-      hicinno == 0 & multi == 0 ~ "No Collaboration"
-    )) %>%
-    group_by(collab_type) %>%
-    summarise(
-      avg_value = mean(!!var_enquo * multiply_by, na.rm = TRUE),
-      n = n(),
-      nn = log(n),
-      .groups = "drop"
-    ) %>%
-    mutate(
-      share = n / sum(n),
-      log_share = nn / sum(nn),
-      log_share_scaled = (log_share - min(log_share)) * 50,
-      y_pos = row_number(),
-      ymin = y_pos - log_share/2,
-      ymax = y_pos + log_share/2
-    ) %>%
-    arrange(desc(avg_value))
-  
-  # Create plot
-  ggplot(summary_data) +
-    geom_rect(aes(xmin = 0, xmax = avg_value, ymin = ymin, ymax = ymax, fill = collab_type),
-              alpha = 0.8, color = "white", linewidth = 1) +
-    geom_text(aes(x = avg_value + max(avg_value)*0.02, y = y_pos, 
-                  label = paste0(round(avg_value, 2))),
-              hjust = 0, size = label_size, fontface = "bold", color = "black") +
-    geom_text(aes(x = 0, y = y_pos, 
-                  label = paste0(collab_type, "\n(n=", scales::comma(n), ", ", 
-                                round(share*100, 1), "%)")),
-              hjust = 1.05, size = text_size, fontface = "bold", color = "black") +
-    scale_fill_brewer(palette = palette) +
-    labs(title = title,
-         subtitle = "Bar width proportional to log(share) of observations",
-         x = xlab,
-         y = NULL) +
-    theme_minimal() +
-    theme(
-      legend.position = "none",
-      panel.grid.major.y = element_blank(),
-      plot.title = element_text(face = "bold", size = 14),
-      axis.text.y = element_blank(),
-      plot.margin = margin(10, 10, 10, 100)
-    ) +
-    coord_cartesian(clip = "off")
-}
-
-# Usage:
-plot_collab_returns(bigX, istrax_global)
-plot_collab_returns(bigX, istrax_EMDEexCN)
-
-
-
-```
-
-# find locations...
-
-we are using tidygeocoder & mapbox...
-
-```{r}
-
-library(arrow)
-library(dplyr)
-df=read_parquet(paste0(localbig,"\\data\\person_address.parquet"))
-
-library(tidygeocoder)
-
-# create a dataframe with addresses
-
-## let's check if we have stored such a dataframe previously
-mboxfile=paste0(localbig,"\\data\\lat_longs_mapbox.parquet")
-if (!file.exists(mboxfile)) {
-  #df=df %>% mutate(rr=runif(1:n()))  %>% arrange(rr) %>% select(-rr)
-  some_addresses=df %>% head(10) %>% mutate(addressstr=paste(person_address,person_ctry_code,sep=","))
-  # geocode the addresses
-  lat_longs_mapbox <- some_addresses %>%
-    geocode(addressstr, method = 'mapbox', 
-            #flatten=T,
-            #full_results=T,
-            #id = id,
-            
-            #type= type,
-            lat = latitude , long = longitude)
-  #> Passing 3 addresses to the Nominatim single address geocoder
-  #> Query completed in: 3.2 seconds
-} else{
-  
-  lat_longs_mapbox=read_parquet(mboxfile)
-  
-}
-
-
-
-recursive_mapbox=function(){
-  df_filtered <- df %>%
-    anti_join(lat_longs_mapbox, by = "person_id")
-  
-  df_filtered=df_filtered %>% mutate(rr=runif(1:n()))  %>% arrange(rr) %>% select(-rr)
-  
-  some_addresses=df_filtered %>% head(20000) %>%  mutate(addressstr=paste(person_address,person_ctry_code,sep=","))
-  print(nrow(df_filtered))
-  lat_longs_mapbox2 <- some_addresses %>%
-    geocode(addressstr, method = 'mapbox', lat = latitude , long = longitude,full_results=F)
-  
-  
-  lat_longs_mapbox_new=lat_longs_mapbox %>% bind_rows(lat_longs_mapbox2)
-  #lat_longs_mapbox=lat_longs_mapbox %>% bind_rows(lat_longs_mapbox2)
-  return(lat_longs_mapbox_new)
-}
-
-#lat_longs_mapbox=lat_longs_mapbox_new  %>% distinct()
-#lat_longs_mapbox=lat_longs_mapbox  %>% distinct() %>% select(-rr)
-
-
-
-lat_longs_mapbox=recursive_mapbox()
-lat_longs_mapbox=lat_longs_mapbox %>% distinct()
-
-write_parquet(lat_longs_mapbox,paste0(localbig,"\\data\\lat_longs_mapbox.parquet"))
-write_parquet(lat_longs_mapbox,paste0(localbigwb,"\\data\\lat_longs_mapbox.parquet"))
-
-
-
-
-
-
-
-```
-
-### reading back in from disk
-
-```{r}
-library(arrow)
-lat_longs_mapbox=read_parquet(paste0(localbig,"\\data\\lat_longs_mapbox.parquet"))
-
-
-```
-
-
-
-
-#### Cleaning up
-We examine if the points suggested fall within the country boundaries, which doesn't 
-always seem the case...
-
-
-```{r}
-test=lat_longs_mapbox %>% filter(nchar(person_address)<=2)
-testdf=lat_longs_mapbox %>% filter(!is.na(person_ctry_code) & !is.na(longitude))
-
-library(sf)
-library(rnaturalearth)
-
-# Get world boundaries
-world <- ne_countries(scale = "medium", returnclass = "sf")
-
-
-
-world <- world %>%
-  mutate(iso_a2_fixed = case_when(
-    name == "Taiwan" ~ "TW",
-    name == "Kosovo" ~ "XK",
-    iso_a2 == "-99" & !is.na(iso_a3) ~ iso_a3,  # Fallback to iso_a3
-    TRUE ~ iso_a2
-  ))
-
-
-
-
-
-
-# Convert dataframe to spatial points
-df_sf <- st_as_sf(testdf, 
-                  coords = c("longitude", "latitude"), 
-                  crs = 4326)
-
-
-```
-
-
-
-
-```{r}
-
-
-
-# Detect number of cores
-library(parallel)
-n_cores <- detectCores() - 5  # Leave one core free
-
-# Create cluster
-cl <- makeCluster(n_cores)
-
-# Export necessary objects to cluster
-clusterExport(cl, c("df_sf", "world", "testdf"), envir = environment())
-clusterEvalQ(cl, library(sf))
-
-# Parallel processing
-testdf$ok <- parSapply(cl, 1:nrow(testdf), function(i) {
-  country_poly <- world[world$iso_a2 == testdf$person_ctry_code[i], ]
-  if(nrow(country_poly) > 0) {
-    return(st_intersects(df_sf[i,], country_poly, sparse = FALSE)[1,1])
-  } else {
-    return(FALSE)
+    resp <- request("https://api.openai.com/v1/chat/completions") %>%
+      req_headers(
+        "Authorization" = paste("Bearer", api_key),
+        "Content-Type"  = "application/json"
+      ) %>%
+      req_body_json(list(
+        model       = "gpt-4o-mini",
+        temperature = 0,
+        messages    = list(
+          list(role = "system",
+               content = "You are a corporate research assistant with deep knowledge of multinational companies, their subsidiaries, former names, and patent filing entities. Return only valid JSON."),
+          list(role = "user", content = prompt)
+        )
+      )) %>%
+      req_timeout(120) %>%
+      req_retry(max_tries = 3, backoff = ~ 5) %>%
+      req_perform()
+
+    content <- resp_body_json(resp)
+    reply   <- content$choices[[1]]$message$content
+
+    # Clean up response: strip markdown fences if present
+    reply <- str_replace_all(reply, "^```json\\s*|```\\s*$", "")
+
+    parsed <- tryCatch(
+      fromJSON(reply, simplifyDataFrame = FALSE),
+      error = function(e) {
+        message("  JSON parse error in batch ", i, ": ", e$message)
+        message("  Raw reply (first 500 chars): ", substr(reply, 1, 500))
+        return(NULL)
+      }
+    )
+
+    if (!is.null(parsed)) {
+      for (item in parsed) {
+        company_name <- item$company
+        aliases      <- unlist(item$aliases)
+        if (length(aliases) > 0) {
+          all_aliases[[length(all_aliases) + 1]] <- tibble(
+            company_raw = company_name,
+            alias       = toupper(trimws(aliases))
+          )
+        }
+      }
+    }
+
+    # Respect rate limits
+    Sys.sleep(1)
   }
-})
 
+  alias_table <- bind_rows(all_aliases) %>% distinct()
+  message("Generated ", nrow(alias_table), " aliases for ",
+          n_distinct(alias_table$company_raw), " companies")
 
-# Stop cluster
-stopCluster(cl)
-
-
-test=testdf %>% filter(person_ctry_code=="TW")
-
-
-# correct some issues
-testdf=testdf %>% mutate(ok=ifelse(person_ctry_code=="TW" ,T,ok), # correct some Chines corruption of the shapefile
-                         ok=ifelse(nchar(gsub("\\s+", "", person_ctry_code))<2 ,T,ok) )
-
-
-
-
-
-
-```
-
-
-
-### Infer iso2
-
-```{r}
-
-
-library(sf)
-library(rnaturalearth)
-library(dplyr)
-
-# Get world boundaries
-world <- ne_countries(scale = "medium", returnclass = "sf")
-
-# Initialize inferrediso2 column
-lat_longs_mapbox <- lat_longs_mapbox %>%
-  mutate(inferrediso2 = NA_character_)
-
-# Filter to only rows with valid coordinates
-valid_coords <- !is.na(lat_longs_mapbox$latitude) & 
-                !is.na(lat_longs_mapbox$longitude)
-
-if(sum(valid_coords) > 0) {
-  # Convert to spatial points (only valid coordinates)
-  points_sf <- st_as_sf(lat_longs_mapbox[valid_coords, ], 
-                        coords = c("longitude", "latitude"), 
-                        crs = 4326)
-  
-  # Spatial join to find which country polygon contains each point
-  points_with_country <- st_join(points_sf, 
-                                 world %>% select(iso_a2), 
-                                 join = st_intersects,
-                                 left = TRUE)
-  
-  # Extract inferrediso2
-  lat_longs_mapbox$inferrediso2[valid_coords] <- points_with_country$iso_a2
-  
-  # Special handling for Taiwan
-  # Define Taiwan's bounding box with some buffer
-  taiwan_bounds <- list(
-    lat_min = 21.8,
-    lat_max = 25.4,
-    lon_min = 119.3,
-    lon_max = 122.1
-  )
-  
-  # Identify points in Taiwan region
-  in_taiwan_region <- valid_coords & 
-                      lat_longs_mapbox$latitude >= taiwan_bounds$lat_min & 
-                      lat_longs_mapbox$latitude <= taiwan_bounds$lat_max & 
-                      lat_longs_mapbox$longitude >= taiwan_bounds$lon_min & 
-                      lat_longs_mapbox$longitude <= taiwan_bounds$lon_max
-  
-  # Override with TW for points in Taiwan region (regardless of what spatial join said)
-  lat_longs_mapbox$inferrediso2[in_taiwan_region] <- "TW"
+  write_parquet(alias_table, aliasfile)
 }
 
+alias_table <- read_parquet(aliasfile)
+message("Alias table: ", nrow(alias_table), " aliases for ",
+        n_distinct(alias_table$company_raw), " companies")
+
+# Quick look
+alias_table %>% group_by(company_raw) %>%
+  summarise(n_aliases = n(), .groups = "drop") %>%
+  arrange(desc(n_aliases)) %>% head(10)
 
 ```
 
-### clean up some more...
-```{r}
-
-lat_longs_mapbox$inferrediso2[lat_longs_mapbox$inferrediso2=="-99"|lat_longs_mapbox$inferrediso2==""] <- NA
-
-lat_longs_mapbox= lat_longs_mapbox %>% mutate(person_ctry_code=gsub("\\s+", "", person_ctry_code)) %>%
-                                       mutate(person_ctry_code=ifelse(person_ctry_code=="" & !is.na(inferrediso2),inferrediso2,person_ctry_code)) 
-
-
-test=lat_longs_mapbox %>% filter(person_ctry_code=="TW")
-
-
-
-lat_longs_mapbox=lat_longs_mapbox %>% filter(!is.na(latitude) ) %>% 
-                                      filter(!is.na(person_ctry_code)) %>% 
-                                      filter(person_ctry_code!="") %>% 
-                                      filter(!(person_ctry_code!=inferrediso2 & !is.na(inferrediso2) ))
-
-
-
-lat_longs_bycountry=lat_longs_mapbox %>% group_by(person_ctry_code,longitude,latitude) %>% summarise(innos=n())
-
-```
-
-
-
-Let's have a look:
-
+#### Step 2: Clean aliases and upload to BigQuery
 
 ```{r}
+library(bigrquery)
+library(dplyr)
+library(stringr)
+library(arrow)
 
-library(leaflet)
+project_id <- "patbis"
+dataset    <- "inglobe"
 
-# With clustering (much better for 100k points!)
-leaflet(lat_longs_mapbox) %>%
-  addTiles() %>%
-  addCircleMarkers(
-    lng = ~longitude,
-    lat = ~latitude,
-    radius = 3,
-    fillOpacity = 0.5,
-    stroke = FALSE,
-    clusterOptions = markerClusterOptions()
-  )
+# Clean alias names: strip legal suffixes and punctuation (same treatment
+# we will apply to han_name on the BigQuery side)
+alias_clean <- alias_table %>%
+  mutate(
+    alias_clean = alias %>%
+      toupper() %>%
+      str_replace_all("[.,;:!?'\"\\-]", " ") %>%
+      str_replace_all(
+        "\\b(PLC|LTD|LIMITED|INC|INCORPORATED|CORP|CORPORATION|CO|COMPANY|GROUP|HOLDINGS|HOLDING|AG|GMBH|SA|SPA|NV|BV|SE|AS|KK|OYJ|AB|A/S|SRL|LLC|LP|& CO)\\b",
+        ""
+      ) %>%
+      str_replace_all("\\s+", " ") %>%
+      str_trim()
+  ) %>%
+  filter(nchar(alias_clean) >= 2) %>%
+  distinct()
 
-
-
-
-```
-
-
-# deal with capital cities .... gonna be used as default...
-
-
-```{r}
-
-
-# Create a comprehensive dataframe of capital cities with coordinates
-capital_coords <- data.frame(
-  iso2 = c(
-    "AF", "AL", "DZ", "AD", "AO", "AG", "AR", "AM", "AU", "AT",
-    "AZ", "BS", "BH", "BD", "BB", "BY", "BE", "BZ", "BJ", "BT",
-    "BO", "BA", "BW", "BR", "BN", "BG", "BF", "BI", "KH", "CM",
-    "CA", "CV", "CF", "TD", "CL", "CN", "CO", "KM", "CG", "CD",
-    "CR", "CI", "HR", "CU", "CY", "CZ", "DK", "DJ", "DM", "DO",
-    "EC", "EG", "SV", "GQ", "ER", "EE", "ET", "FJ", "FI", "FR",
-    "GA", "GM", "GE", "DE", "GH", "GR", "GD", "GT", "GN", "GW",
-    "GY", "HT", "HN", "HU", "IS", "IN", "ID", "IR", "IQ", "IE",
-    "IL", "IT", "JM", "JP", "JO", "KZ", "KE", "KI", "KP", "KR",
-    "KW", "KG", "LA", "LV", "LB", "LS", "LR", "LY", "LI", "LT",
-    "LU", "MK", "MG", "MW", "MY", "MV", "ML", "MT", "MH", "MR",
-    "MU", "MX", "FM", "MD", "MC", "MN", "ME", "MA", "MZ", "MM",
-    "NA", "NR", "NP", "NL", "NZ", "NI", "NE", "NG", "NO", "OM",
-    "PK", "PW", "PS", "PA", "PG", "PY", "PE", "PH", "PL", "PT",
-    "QA", "RO", "RU", "RW", "KN", "LC", "VC", "WS", "SM", "ST",
-    "SA", "SN", "RS", "SC", "SL", "SG", "SK", "SI", "SB", "SO",
-    "ZA", "SS", "ES", "LK", "SD", "SR", "SZ", "SE", "CH", "SY",
-    "TW", "TJ", "TZ", "TH", "TL", "TG", "TO", "TT", "TN", "TR",
-    "TM", "TV", "UG", "UA", "AE", "GB", "US", "UY", "UZ", "VU",
-    "VA", "VE", "VN", "YE", "ZM", "ZW"
-  ),
-  capital = c(
-    "Kabul", "Tirana", "Algiers", "Andorra la Vella", "Luanda", "Saint John's", "Buenos Aires", "Yerevan", "Canberra", "Vienna",
-    "Baku", "Nassau", "Manama", "Dhaka", "Bridgetown", "Minsk", "Brussels", "Belmopan", "Porto-Novo", "Thimphu",
-    "Sucre", "Sarajevo", "Gaborone", "Brasília", "Bandar Seri Begawan", "Sofia", "Ouagadougou", "Gitega", "Phnom Penh", "Yaoundé",
-    "Ottawa", "Praia", "Bangui", "N'Djamena", "Santiago", "Beijing", "Bogotá", "Moroni", "Brazzaville", "Kinshasa",
-    "San José", "Yamoussoukro", "Zagreb", "Havana", "Nicosia", "Prague", "Copenhagen", "Djibouti", "Roseau", "Santo Domingo",
-    "Quito", "Cairo", "San Salvador", "Malabo", "Asmara", "Tallinn", "Addis Ababa", "Suva", "Helsinki", "Paris",
-    "Libreville", "Banjul", "Tbilisi", "Berlin", "Accra", "Athens", "St. George's", "Guatemala City", "Conakry", "Bissau",
-    "Georgetown", "Port-au-Prince", "Tegucigalpa", "Budapest", "Reykjavik", "New Delhi", "Jakarta", "Tehran", "Baghdad", "Dublin",
-    "Jerusalem", "Rome", "Kingston", "Tokyo", "Amman", "Nur-Sultan", "Nairobi", "Tarawa", "Pyongyang", "Seoul",
-    "Kuwait City", "Bishkek", "Vientiane", "Riga", "Beirut", "Maseru", "Monrovia", "Tripoli", "Vaduz", "Vilnius",
-    "Luxembourg", "Skopje", "Antananarivo", "Lilongwe", "Kuala Lumpur", "Malé", "Bamako", "Valletta", "Majuro", "Nouakchott",
-    "Port Louis", "Mexico City", "Palikir", "Chișinău", "Monaco", "Ulaanbaatar", "Podgorica", "Rabat", "Maputo", "Naypyidaw",
-    "Windhoek", "Yaren", "Kathmandu", "Amsterdam", "Wellington", "Managua", "Niamey", "Abuja", "Oslo", "Muscat",
-    "Islamabad", "Ngerulmud", "Ramallah", "Panama City", "Port Moresby", "Asunción", "Lima", "Manila", "Warsaw", "Lisbon",
-    "Doha", "Bucharest", "Moscow", "Kigali", "Basseterre", "Castries", "Kingstown", "Apia", "San Marino", "São Tomé",
-    "Riyadh", "Dakar", "Belgrade", "Victoria", "Freetown", "Singapore", "Bratislava", "Ljubljana", "Honiara", "Mogadishu",
-    "Pretoria", "Juba", "Madrid", "Colombo", "Khartoum", "Paramaribo", "Mbabane", "Stockholm", "Bern", "Damascus",
-    "Taipei", "Dushanbe", "Dodoma", "Bangkok", "Dili", "Lomé", "Nuku'alofa", "Port of Spain", "Tunis", "Ankara",
-    "Ashgabat", "Funafuti", "Kampala", "Kyiv", "Abu Dhabi", "London", "Washington, D.C.", "Montevideo", "Tashkent", "Port Vila",
-    "Vatican City", "Caracas", "Hanoi", "Sana'a", "Lusaka", "Harare"
-  ),
-  latitude = c(
-    34.5553, 41.3275, 36.7538, 42.5063, -8.8383, 17.1175, -34.6037, 40.1792, -35.2809, 48.2082,
-    40.4093, 25.0343, 26.0667, 23.8103, 13.0969, 53.9045, 50.8503, 17.2510, 6.4969, 27.4728,
-    -19.0196, 43.8564, -24.6282, -15.8267, 4.8895, 42.6977, 12.3714, -3.3731, 11.5564, 3.8480,
-    45.4215, 14.9177, 4.3947, 12.1348, -33.4489, 39.9042, 4.7110, -11.7172, -4.2634, -4.4419,
-    9.9281, 6.8270, 45.8150, 23.1136, 35.1856, 50.0755, 55.6761, 11.8251, 15.3017, 18.4861,
-    -0.1807, 30.0444, 13.6929, 3.7504, 15.3229, 59.4370, 9.0320, -18.1248, 60.1699, 48.8566,
-    0.4162, 13.4549, 41.7151, 52.5200, 5.6037, 37.9838, 12.0561, 14.6349, 9.6412, 11.8637,
-    6.8013, 18.5944, 14.0723, 47.4979, 64.1466, 28.6139, -6.2088, 35.6892, 33.3152, 53.3498,
-    31.7683, 41.9028, 17.9714, 35.6762, 31.9454, 51.1694, -1.2921, 1.3382, 39.0392, 37.5665,
-    29.3759, 42.8746, 17.9757, 56.9496, 33.8938, -29.3167, 6.3156, 32.8872, 47.1410, 54.6872,
-    49.6116, 41.9973, -18.8792, -13.9626, 3.1390, 4.1755, 12.6392, 35.8989, 7.0897, 18.0735,
-    -20.1609, 19.4326, 6.9147, 47.0105, 43.7384, 47.9186, 42.4304, 34.0209, -25.9655, 19.7633,
-    -22.5597, -0.5477, 27.7172, 52.3676, -41.2865, 12.1150, 13.5127, 9.0765, 59.9139, 23.5880,
-    33.6844, 7.5006, 31.9522, 8.9824, -9.4438, -25.2637, -12.0464, 14.5995, 52.2297, 38.7223,
-    25.2854, 44.4268, 55.7558, -1.9403, 17.3026, 13.9094, 13.4877, -13.8333, 43.9424, 0.3364,
-    24.7136, 14.7167, 44.7866, -4.6796, 8.4657, 1.3521, 48.1486, 46.0569, -9.4456, 2.0469,
-    -25.7479, 4.8517, 40.4168, 6.9271, 15.5007, 5.8520, -26.3054, 59.3293, 46.9481, 33.5138,
-    25.0330, 38.5598, -6.7924, 13.7563, -8.5569, 6.1256, -21.1789, 10.6918, 11.8745, 39.9334,
-    37.9601, -8.5211, 0.3476, 50.4501, 24.4539, 51.5074, 38.9072, -34.9011, 41.2995, -17.7334,
-    41.9029, 10.4806, 21.0285, 15.5527, -15.4167, -17.8252
-  ),
-  longitude = c(
-    69.2075, 19.8187, 3.0588, 1.5218, 13.2344, -61.8456, -58.3816, 44.4991, 149.1300, 16.3738,
-    49.8671, -77.3963, 50.5577, 90.4125, -59.6162, 27.5615, 4.3517, -88.7590, 2.6289, 89.6390,
-    -65.2627, 18.4131, 25.9231, -47.9292, 114.9400, 23.3219, -1.5247, 29.8739, 104.9282, 11.5021,
-    -75.6972, -23.5087, 18.5582, 15.0445, -70.6693, 116.4074, -74.0721, 43.2551, 15.2662, 15.2663,
-    -84.0907, -5.2893, 15.9819, -82.3666, 33.3823, 14.4378, 12.5683, 43.1456, -61.3870, -69.9312,
-    -78.4678, 31.2357, -89.2182, 8.7832, 38.9251, 24.7536, 38.7469, 178.4419, 24.9384, 2.3522,
-    9.4673, -16.5790, 44.8271, 13.4050, -0.1870, 23.7275, -61.7480, -90.5069, -13.5784, -15.5989,
-    -58.1551, -72.3074, -87.2068, 19.0402, -21.9426, 77.2090, 106.8456, 51.3890, 44.3661, -6.2603,
-    35.2137, 12.4964, -76.7931, 139.6503, 35.9284, 71.4704, 36.8219, 172.9790, 125.7625, 126.9780,
-    47.9774, 74.5698, 102.6000, 24.1052, 35.4953, 27.4974, -10.7969, 13.1913, 9.5215, 25.2797,
-    6.1296, 21.4314, 47.5079, 33.7738, 101.6869, 73.5093, -8.0029, 14.5146, 171.1845, -15.9582,
-    57.5012, -99.1332, 158.1611, 28.8497, 7.4246, 106.9057, 19.2594, -6.8498, 32.5732, 96.1561,
-    17.0832, 166.9315, 85.3240, 4.9041, 174.7633, -86.2362, 2.1254, 7.4951, 10.7522, 58.4059,
-    73.0479, 134.4893, 35.2332, -79.5199, 147.1803, -57.5759, -77.0428, 120.9842, 21.0122, -9.1393,
-    51.5310, 26.1025, 37.6173, -1.9536, -62.7177, -60.9789, -61.2248, -171.7667, 12.4578, 6.7273,
-    46.7160, -17.4467, 20.4489, 55.4540, -13.2317, 103.8198, 17.1077, 14.5058, 159.9729, 45.3182,
-    28.1879, 31.5825, -3.7038, 79.8612, 32.5599, -55.2038, 31.1367, 18.0686, 7.4474, 36.2765,
-    121.5654, 68.7870, 35.7516, 100.5018, 125.5603, 1.2313, -175.1982, -61.5089, 10.1815, 32.8597,
-    58.3260, 179.1942, 32.5825, 30.5234, 54.3773, -0.1278, -77.0369, -56.1645, 69.2401, 168.3273,
-    12.4534, -66.8792, 105.8542, 44.2070, 28.2871, 31.0522
-  ),
-  stringsAsFactors = FALSE
-)
-
-# View the dataframe
-head(capital_coords, 10)
-
-# Check that Taiwan is included
-capital_coords[capital_coords$iso2 == "TW", ]
-
-# Optional: Sort by ISO2 code
-capital_coords <- capital_coords[order(capital_coords$iso2), ]
-
-# Print summary
-cat("Total countries:", nrow(capital_coords), "\n")
-
-```
-
-
-
-
-
-
-```{r}
-library(plotly)
-library(ggplot2)
-library(maps)
-
-# Create ggplot
-world_map <- map_data("world")
-
-p <- ggplot() +
-  geom_polygon(data = world_map, 
-               aes(x = long, y = lat, group = group),
-               fill = "lightgray", 
-               color = "white", 
-               linewidth = 0.2) +
-  geom_point(data = capital_coords,
-             aes(x = longitude, y = latitude, 
-                 text = paste0("Capital: ", capital, "\n",
-                              "Country: ", iso2, "\n",
-                              "Coordinates: ", round(latitude, 2), ", ", round(longitude, 2))),
-             color = "red", 
-             size = 2, 
-             alpha = 0.7) +
-  theme_minimal() +
-  labs(title = "World Capital Cities - Interactive",
-       x = "Longitude",
-       y = "Latitude")
-
-# Convert to interactive plotly
-ggplotly(p, tooltip = "text") %>%
-  layout(
-    hoverlabel = list(bgcolor = "white", font = list(size = 12))
-  )
-
-```
-
-
-
-## now infer long and lats from either the succesful matches or if there is none...let's just use the capital location...
-
-
-```{r, eval=FALSE}
-  library(bigrquery)
-  library(DBI)
-  
-  # Set your project ID
-  project_id <- "patbis"
-  
-  # Option 1: Direct table download
-  # Specify dataset and table name
-  dataset <- "inglobe"
-  table <- "person_address_extract"
-  
-
-  # Upload - this creates or replaces the table
+# Upload to BigQuery
 bq_table_upload(
-  x = bq_table(project_id, dataset, "lat_longs_mapbox"),
-  values = lat_longs_mapbox,
-  #fields = df,  # Optional: specify schema
-  write_disposition = "WRITE_TRUNCATE"  # Replaces existing table
+  x = bq_table(project_id, dataset, "scoreboard_aliases"),
+  values = alias_clean,
+  write_disposition = "WRITE_TRUNCATE"
 )
-
-
-
-capital_coords=capital_coords %>% mutate(person_ctry_code=iso2) %>% select(person_ctry_code,latitude,longitude)
-bq_table_upload(
-  x = bq_table(project_id, dataset, "capital_coords"),
-  values = capital_coords,
-  #fields = df,  # Optional: specify schema
-  write_disposition = "WRITE_TRUNCATE"  # Replaces existing table
-)
-
-  
+message("Uploaded ", nrow(alias_clean), " cleaned aliases to BigQuery")
 
 ```
 
 
+#### Step 3: Match aliases against PATSTAT han_name on BigQuery
 
-
-
+We use exact match on cleaned names plus `EDIT_DISTANCE` for close
+variants. The normalized edit distance (edit_distance / max_length)
+must be below 0.15 to qualify, which catches typos and minor
+abbreviation differences but rejects unrelated names.
 
 ```{r}
+matchfile <- paste0(inglobebig, "\\scoreboard_person_mapping.parquet")
+
+if (!file.exists(matchfile)) {
+
+  match_sql <- "
+    -- Clean han_name: strip legal suffixes, uppercase, trim
+    WITH clean_han AS (
+      SELECT DISTINCT
+        han_id,
+        han_name,
+        TRIM(REGEXP_REPLACE(
+          UPPER(han_name),
+          r'\\b(PLC|LTD|LIMITED|INC|INCORPORATED|CORP|CORPORATION|CO|COMPANY|GROUP|HOLDINGS|HOLDING|AG|GMBH|SA|SPA|NV|BV|SE|AS|KK|OYJ|AB|SRL|LLC|LP|& CO)\\b',
+          ''
+        )) AS han_clean
+      FROM `patbis.fromPATSTAT2021.tls206_person`
+      WHERE psn_sector = 'COMPANY'
+        AND han_name IS NOT NULL
+        AND TRIM(han_name) != ''
+    ),
+
+    -- Stage 1: exact match on cleaned names
+    exact_matches AS (
+      SELECT
+        a.company_raw,
+        a.alias,
+        a.alias_clean,
+        ch.han_id,
+        ch.han_name,
+        ch.han_clean,
+        'exact' AS match_type
+      FROM `patbis.inglobe.scoreboard_aliases` a
+      INNER JOIN clean_han ch
+        ON UPPER(TRIM(ch.han_clean)) = UPPER(TRIM(a.alias_clean))
+    ),
+
+    -- Stage 2: EDIT_DISTANCE for close variants (only for aliases not
+    -- yet matched exactly). We restrict candidates by requiring the
+    -- first 3 characters to match (cheap blocking) and the lengths
+    -- to be within 3 of each other, then apply EDIT_DISTANCE.
+    unmatched_aliases AS (
+      SELECT a.*
+      FROM `patbis.inglobe.scoreboard_aliases` a
+      LEFT JOIN exact_matches em
+        ON a.company_raw = em.company_raw
+        AND a.alias_clean = em.alias_clean
+      WHERE em.company_raw IS NULL
+        AND LENGTH(TRIM(a.alias_clean)) >= 4
+    ),
+
+    fuzzy_matches AS (
+      SELECT
+        ua.company_raw,
+        ua.alias,
+        ua.alias_clean,
+        ch.han_id,
+        ch.han_name,
+        ch.han_clean,
+        'fuzzy' AS match_type
+      FROM unmatched_aliases ua
+      CROSS JOIN clean_han ch
+      WHERE
+        -- Blocking: first 3 chars must match
+        SUBSTR(UPPER(TRIM(ch.han_clean)), 1, 3)
+          = SUBSTR(UPPER(TRIM(ua.alias_clean)), 1, 3)
+        -- Length must be within 3 characters
+        AND ABS(LENGTH(TRIM(ch.han_clean)) - LENGTH(TRIM(ua.alias_clean))) <= 3
+        -- Normalized edit distance < 0.15
+        AND EDIT_DISTANCE(
+              UPPER(TRIM(ch.han_clean)),
+              UPPER(TRIM(ua.alias_clean)),
+              max_distance => 5
+            ) < GREATEST(LENGTH(TRIM(ch.han_clean)), LENGTH(TRIM(ua.alias_clean))) * 0.15
+    ),
+
+    -- Combine
+    all_matches AS (
+      SELECT * FROM exact_matches
+      UNION ALL
+      SELECT * FROM fuzzy_matches
+    )
+
+    -- Expand to person_id level, restricted to holders
+    SELECT DISTINCT
+      m.company_raw,
+      m.alias,
+      m.match_type,
+      m.han_id,
+      m.han_name,
+      p.person_id,
+      p.person_name,
+      p.person_ctry_code
+    FROM all_matches m
+    INNER JOIN `patbis.fromPATSTAT2021.tls206_person` p
+      ON m.han_id = p.han_id
+    INNER JOIN (
+      SELECT DISTINCT person_id
+      FROM `patbis.inglobe.holders`
+    ) h
+      ON p.person_id = h.person_id
+  "
+
+  message("Running matching query on BigQuery...")
+  tb <- bq_project_query(project_id, match_sql)
+  scoreboard_person_mapping <- bq_table_download(tb)
+
+  write_parquet(scoreboard_person_mapping, matchfile)
+  message("Saved ", nrow(scoreboard_person_mapping), " rows to ", matchfile)
+}
+
+scoreboard_person_mapping <- read_parquet(matchfile)
 
 
-anti=df %>% anti_join(lat_longs_mapbox) %>% select(person_id,person_ctry_code)          # figure out addresses that are not in the mapbox frame
-anti=anti %>% filter(!is.na(person_ctry_code) & gsub("\\s+", "", person_ctry_code)!="") # We focus only on those where we have at least a country code
-
-
-
-
-
-
-lat_long=lat_longs_mapbox %>% select(longitude,latitude,person_ctry_code) %>% bind_rows(capital_coords) %>% group_by(person_ctry_code) %>% 
-  mutate(rr=runif(1:n())) %>% arrange(person_ctry_code, rr) %>% mutate(nn=1:n()) %>% filter(nn<3) %>%  # Let's restrict to 5 places per country...
-  select(longitude,latitude,person_ctry_code)
-
-
-anti=anti %>% left_join(lat_long,by="person_ctry_code") %>%
-  group_by(person_id) %>% mutate(rr=runif(1:n())) %>% arrange(person_id, rr) %>% mutate(nn=1:n()) %>% filter(nn==1)
-
-
-anti=anti %>% select(-nn,-rr)
-
-dfnew=anti %>% bind_rows(lat_longs_mapbox) %>% select(person_id, person_ctry_code,longitude,latitude)
-
+n_distinct(scoreboard_person_mapping$company_raw)
+test=scoreboard_person_mapping %>% distinct(company_raw)
 ```
 
-
-#Saving best guess so far
-
-```{r}
-write_parquet(dfnew,paste0(localbig,"\\data\\dfnew.parquet"))
-
-
-```
-
-
-
-### fuzzy matching of address strings
+#### Step 4: Local fuzzy matching fallback for remaining unmatched companies
 
 ```{r}
-library(data.table)
 library(stringdist)
 
+# Which scoreboard companies got zero matches?
+matched_companies   <- unique(scoreboard_person_mapping$company_raw)
+all_companies       <- unique(top_rd$Company)
+unmatched_companies <- setdiff(all_companies, matched_companies)
 
+message("Matched: ", length(matched_companies), " / ", length(all_companies))
+message("Unmatched: ", length(unmatched_companies))
 
-exact_coords=lat_longs_mapbox %>% select(person_address,person_ctry_code,latitude,longitude) %>% 
-  bind_rows(capital_coords %>% 
-            rename(person_address=capital,person_ctry_code=iso2) %>% 
-            select(longitude,latitude,person_address,person_ctry_code))
-write_parquet(exact_coords,paste0(localbig,"\\data\\exact_coords.parquet"))
-```
+if (length(unmatched_companies) > 0) {
 
+  # Download distinct company han_names from BigQuery (small table)
+  han_sql <- "
+    SELECT DISTINCT han_id, han_name
+    FROM `patbis.fromPATSTAT2021.tls206_person`
+    WHERE psn_sector = 'COMPANY'
+      AND han_name IS NOT NULL
+      AND TRIM(han_name) != ''
+  "
+  tb2 <- bq_project_query(project_id, han_sql)
+  distinct_han <- bq_table_download(tb2)
+  message("Downloaded ", nrow(distinct_han), " distinct company han_names")
 
-```{r}
-exact_coords=read_parquet(paste0(localbig,"\\data\\exact_coords.parquet"))
-#rm(anti)
-antidf=df %>% anti_join(lat_longs_mapbox) %>% select(person_id,person_ctry_code,person_address)     # figure out addresses that are not in the mapbox frame
-antidf=antidf %>% filter(!is.na(person_ctry_code) & gsub("\\s+", "", person_ctry_code)!="")         # We focus only on those where we have at least a country code
+  # Clean name helper
+  clean_name <- function(x) {
+    x %>% toupper() %>%
+      str_replace_all("[.,;:!?'\"\\-]", " ") %>%
+      str_replace_all(
+        "\\b(PLC|LTD|LIMITED|INC|INCORPORATED|CORP|CORPORATION|CO|COMPANY|GROUP|HOLDINGS|HOLDING|AG|GMBH|SA|SPA|NV|BV|SE|AS|KK|OYJ|AB|A/S|SRL|LLC|LP|& CO)\\b",
+        ""
+      ) %>%
+      str_replace_all("\\s+", " ") %>%
+      str_trim()
+  }
 
+  # Build a search table that retains the link back to company_raw
+  search_df <- bind_rows(
+    # The company names themselves
+    tibble(company_raw = unmatched_companies,
+           alias       = unmatched_companies),
+    # Their aliases
+    alias_table %>% filter(company_raw %in% unmatched_companies)
+  ) %>%
+    distinct() %>%
+    mutate(alias_clean = clean_name(alias))
 
+  han_cleaned <- clean_name(distinct_han$han_name)
 
-# Convert to data.table
-setDT(antidf)
-setDT(exact_coords)
+  message("Fuzzy matching ", nrow(search_df), " names against ",
+          length(han_cleaned), " han_names...")
 
-# Normalize addresses function
-normalize_address <- function(x) {
-  x %>%
-    tolower() %>%
-    gsub("[[:punct:]]", " ", .) %>%
-    gsub("\\s+", " ", .) %>%
-    trimws()
-}
+  # Jaro-Winkler fuzzy match
+  match_idx <- amatch(search_df$alias_clean, han_cleaned,
+                      method = "jw", maxDist = 0.03)
 
-
-# Pre-process lookup table once
-exact_coords[, address_norm := normalize_address("person_address")]
-
-# Function to match addresses within a country
-match_country <- function(df_country, lookup_country) {
-  
-  # Normalize addresses
-  df_country[, address_norm := normalize_address(person_address)]
-  
-  # Exact matching
-  df_matched <- merge(
-    df_country, 
-    lookup_country[, .(address_norm, longitude, latitude, person_address)],
-    by = "address_norm",
-    all.x = TRUE,
-    suffixes = c("", "_matched")
-  )
-  
-  # Rename matched address column
-  setnames(df_matched, "person_address_matched", "matched_address", skip_absent = TRUE)
-  
-  # Initialize columns
-  df_matched[, `:=`(
-    match_type = ifelse(is.na(longitude), NA_character_, "exact"),
-    matched_address = ifelse(is.na(matched_address), NA_character_, matched_address)
-  )]
-  
-  # Fuzzy match for unmatched rows
-  unmatched_idx <- which(is.na(df_matched$match_type))
-  
-  if(length(unmatched_idx) > 0 && nrow(lookup_country) > 0) {
-    
-    unmatched_addresses <- df_matched$address_norm[unmatched_idx]
-    
-    # Fuzzy matching
-    matches <- stringdist::amatch(
-      unmatched_addresses,
-      lookup_country$address_norm,
-      method = "jw",
-      maxDist = 0.25,
-      nomatch = NA_integer_
+  # Collect results with company_raw linkage
+  fuzzy_hits <- search_df %>%
+    mutate(han_idx = match_idx) %>%
+    filter(!is.na(han_idx)) %>%
+    mutate(
+      han_name = distinct_han$han_name[han_idx],
+      han_id   = distinct_han$han_id[han_idx],
+      jw_dist  = stringdist(alias_clean, han_cleaned[han_idx], method = "jw")
     )
-    
-    # Only update rows where a match was found
-    valid_matches <- !is.na(matches)
-    
-    if(any(valid_matches)) {
-      valid_idx <- unmatched_idx[valid_matches]
-      valid_match_positions <- matches[valid_matches]
-      
-      df_matched[valid_idx, `:=`(
-        longitude = lookup_country$longitude[valid_match_positions],
-        latitude = lookup_country$latitude[valid_match_positions],
-        matched_address = lookup_country$person_address[valid_match_positions],
-        match_type = "fuzzy"
-      )]
-    }
+
+  if (nrow(fuzzy_hits) > 0) {
+    message("Local fuzzy matching found ", nrow(fuzzy_hits), " additional han_name matches")
+    print(fuzzy_hits %>% select(company_raw, alias_clean, han_name, jw_dist))
+
+    # Expand han_id -> person_id via BigQuery (upload matched han_ids, join there)
+    fuzzy_han_ids <- fuzzy_hits %>% select(company_raw, alias, han_id, han_name) %>% distinct()
+
+    bq_table_upload(
+      x = bq_table(project_id, dataset, "fuzzy_han_matches"),
+      values = fuzzy_han_ids,
+      write_disposition = "WRITE_TRUNCATE"
+    )
+
+    expand_sql <- "
+      SELECT DISTINCT
+        f.company_raw,
+        f.alias,
+        'local_fuzzy' AS match_type,
+        f.han_id,
+        f.han_name,
+        p.person_id,
+        p.person_name,
+        p.person_ctry_code
+      FROM `patbis.inglobe.fuzzy_han_matches` f
+      INNER JOIN `patbis.fromPATSTAT2021.tls206_person` p
+        ON f.han_id = p.han_id
+      INNER JOIN (
+        SELECT DISTINCT person_id
+        FROM `patbis.inglobe.holders`
+      ) h
+        ON p.person_id = h.person_id
+    "
+    tb3 <- bq_project_query(project_id, expand_sql)
+    fuzzy_expanded <- bq_table_download(tb3)
+
+    message("Fuzzy matches expanded to ", nrow(fuzzy_expanded), " person_id rows")
+
+    # Merge into main mapping
+    scoreboard_person_mapping <- bind_rows(
+      scoreboard_person_mapping,
+      fuzzy_expanded
+    ) %>% distinct()
+
+    # Re-save the combined mapping
+    write_parquet(scoreboard_person_mapping, matchfile)
+    message("Updated mapping saved: ", nrow(scoreboard_person_mapping), " total rows")
+
+  } else {
+    message("No additional fuzzy matches found")
   }
-  
-  # Select final columns
-  result <- df_matched[, .(person_ctry_code, person_address, longitude, 
-                           latitude, matched_address, match_type)]
-  
-  return(result)
 }
 
-
-
 ```
 
-###############################>>>>>>>>>>>>>>>>>>>>>>
-# Process each country
-#countries <- unique(antidf$person_ctry_code)
-library(dplyr)
-countries <- unique(exact_coords$person_ctry_code)
 
-results <- lapply(countries, function(ctry) {
-  #ctry="GB"
-  cat("Processing country:", ctry, "\n")
-  
-  df_ctry <- antidf[person_ctry_code == ctry]
-  lookup_ctry <- exact_coords[person_ctry_code == ctry]
-  
-  if(nrow(lookup_ctry) == 0) {
-    # No lookup data for this country
-    df_ctry[, `:=`(longitude = NA_real_, 
-                   latitude = NA_real_,
-                   matched_address = NA_character_,
-                   match_type = "no_lookup")]
-    return(df_ctry[, .(person_ctry_code, person_address, longitude, 
-                       latitude, matched_address, match_type)])
-  }
-  
-  match_country(df_ctry, lookup_ctry)
-})
-
-# Combine all results
-df_final <- rbindlist(results)
-
-
-###############>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-
+#### Step 5: Coverage report
 
 ```{r}
-library(data.table)
-library(future.apply)
-library(progressr)
+n_matched <- n_distinct(scoreboard_person_mapping$company_raw)
+n_total   <- n_distinct(top_rd$Company)
+message("Final coverage: ", n_matched, " / ", n_total, " scoreboard companies matched")
 
-# Setup parallel processing
-library(dplyr)
-countries <- unique(exact_coords$person_ctry_code)
+# Companies with most person_id matches (sanity check)
+scoreboard_person_mapping %>%
+  group_by(company_raw, match_type) %>%
+  summarise(n_person_ids = n_distinct(person_id), .groups = "drop") %>%
+  arrange(desc(n_person_ids)) %>%
+  head(20)
 
-options(future.globals.maxSize = 1.2 * 1024^3)  # 2 GB
-plan(multisession, workers = 1)  # Adjust based on CPU cores (use parallel::detectCores() to check)
-
-# With progress bar
-with_progress({
-  p <- progressor(along = countries)
-  
-  results <- future_lapply(countries, function(ctry) {
-    # Load required packages in each worker
-    library(data.table)
-    
-    p(sprintf("Country: %s", ctry))
-    
-    df_ctry <- antidf[person_ctry_code == ctry]
-    lookup_ctry <- exact_coords[person_ctry_code == ctry]
-    
-    if(nrow(lookup_ctry) == 0) {
-      df_ctry[, `:=`(longitude = NA_real_, 
-                     latitude = NA_real_,
-                     matched_address = NA_character_,
-                     match_type = "no_lookup")]
-      return(df_ctry[, .(person_ctry_code, person_address, longitude, 
-                         latitude, matched_address, match_type)])
-    }
-    
-    match_country(df_ctry, lookup_ctry)
-  }, future.seed = TRUE)
-})
-
-# Combine all results
-df_final <- rbindlist(results)
-
-# Reset to sequential processing when done
-plan(sequential)
-
-
-# Check matching statistics
-df_final[, .N, by = match_type]
-
+# Unmatched companies
+unmatched_final <- top_rd %>%
+  distinct(Company) %>%
+  anti_join(scoreboard_person_mapping, by = c("Company" = "company_raw"))
+if (nrow(unmatched_final) > 0) {
+  message("Still unmatched (", nrow(unmatched_final), " companies):")
+  print(unmatched_final$Company)
+}
 
 ```
 
+#### Step 6: Map scoreboard companies to patent families (docdb_family_id)
 
-### testing embeddings...
-```{r,eval=FALSE}
-library(text)  # R interface to transformers
-library(data.table)
-
-# Initialize text package (one-time setup)
-# text::textrpp_install()
-# text::textrpp_initialize()
-
-# Get embeddings for lookup table (do this once and save)
-lookup_embeddings <- textEmbed(
-  lat_longs_mapbox$address,
-  model = "sentence-transformers/all-MiniLM-L6-v2"
-)
-
-
-
-```
-
-### Some stats...
+Join `scoreboard_person_mapping` (company_raw → person_id) with both
+`holders` and `inventors` to capture patent families where the company
+appears as either assignee or inventor. Combine the unique mappings.
 
 ```{r}
-library(countrycode)
-testtab=dfnew %>% group_by(person_ctry_code) %>% summarise(n())
-
-# Or for more detailed regions
-dfnew$region <- countrycode(sourcevar = dfnew$person_ctry_code,
-                         origin = "iso2c",
-                         destination = "region")
-
-
-testtab=dfnew %>% group_by(region) %>% summarise(n())
-
-
-
-
-```
-
-```{r}
-
-library(leaflet)
 library(dplyr)
 library(arrow)
-dfnew=read_parquet(paste0(localbig,"\\data\\dfnew.parquet"))
+
+firmmap_file <- paste0(dropbox_root, "\\Apps\\iseapp\\firmmap.parquet")
+
+person_ids <- scoreboard_person_mapping %>%
+  select(company_raw, person_id) %>%
+  distinct()
+
+# Match via holders (company as patent assignee/owner)
+firmmap_holders <- person_ids %>%
+  inner_join(holders, by = "person_id") %>%
+  select(company_raw, docdb_family_id) %>%
+  distinct()
+message("Via holders: ", nrow(firmmap_holders), " company-family pairs")
+
+# Match via inventors (company as inventor — applies to corporate inventors)
+firmmap_inventors <- person_ids %>%
+  inner_join(inventors, by = "person_id") %>%
+  select(company_raw, docdb_family_id) %>%
+  distinct()
+message("Via inventors: ", nrow(firmmap_inventors), " company-family pairs")
+
+# Combine and deduplicate
+firmmap <- bind_rows(firmmap_holders, firmmap_inventors) %>%
+  distinct()
+
+message("Combined firm map: ", nrow(firmmap), " rows mapping ",
+        n_distinct(firmmap$company_raw), " companies to ",
+        n_distinct(firmmap$docdb_family_id), " patent families")
+
+write_parquet(firmmap, firmmap_file)
+message("Saved to ", firmmap_file)
+
+head(firmmap)
+
+# Quick summary: patents per company
+firmmap %>%
+  group_by(company_raw) %>%
+  summarise(n_families = n_distinct(docdb_family_id), .groups = "drop") %>%
+  arrange(desc(n_families)) %>%
+  head(20)
 
 
-#df_sample <- dfnew %>% slice_sample(n = 10000)
-
-
-
-library(data.table)
-dfnew <- as.data.table(dfnew)
-dt_sample <- dfnew[sample(.N, 1000000)]
-
-# With clustering (much better for 100k points!)
-leaflet(dt_sample) %>%
-  addTiles() %>%
-  addCircleMarkers(
-    lng = ~longitude,
-    lat = ~latitude,
-    radius = 3,
-    fillOpacity = 0.5,
-    stroke = FALSE,
-    clusterOptions = markerClusterOptions()
-  )
-
-
-
+firmmap %>% distinct(docdb_family_id) %>% nrow()
 
 
 ```
 
+#### Step 7: Create firm sector mapping
 
-
-
-```{r,eval=FALSE}
-bq_table_upload(
-  x = bq_table(project_id, dataset, "dfnew"),
-  values = dfnew,
-  #fields = df,  # Optional: specify schema
-  write_disposition = "WRITE_TRUNCATE"  # Replaces existing table
-)
-```
-
-
-
-
-
-# double fixed effects...
-
-
-### what about transitions?
-
+Map each company to its ICB3 sector classification from the scoreboard.
 
 ```{r}
+library(dplyr)
+library(arrow)
 
-#ainventors=inventors %>% group_by(person_id) %>% summarise(nn=n())
+# Identify the ICB3 long column name (may vary across scoreboard editions)
+icb3_col <- grep("ICB3.*long|ICB3_long", names(top_rd), value = TRUE, ignore.case = TRUE)
+if (length(icb3_col) == 0) {
+  message("Available columns: ", paste(names(top_rd), collapse = ", "))
+  stop("Could not find ICB3 long column in top_rd")
+}
+message("Using column: ", icb3_col[1])
 
-library(collapse)
-ainventors = fcount(inventors, person_id)
+firmsectormap <- top_rd %>%
+  select(company_raw = Company, sector = all_of(icb3_col[1]),
+         RnD = `R&D (€million)`) %>%
+  distinct() %>%
+  filter(company_raw %in% unique(firmmap$company_raw))
+
+message("Firm sector map: ", nrow(firmsectormap), " companies with sector classification")
+
+sectormap_file <- paste0(dropbox_root, "\\Apps\\iseapp\\firmsectormap.parquet")
+write_parquet(firmsectormap, sectormap_file)
+message("Saved to ", sectormap_file)
+
+# Summary by sector
+firmsectormap %>%
+  group_by(sector) %>%
+  summarise(n_companies = n(), .groups = "drop") %>%
+  arrange(desc(n_companies))
 
 
-test=ainventors %>% filter(N>1) # a good deal of inventors with more than one innovation
-multi_invent_innos=inventors %>% inner_join(test)
-#testLMIC=test %>% inner_join(bigX)
-#ainventors = inventors %>% fgroup_by(person_id) %>% fsummarise(nn = fn())
-multi_invent_innos=multi_invent_innos %>% rename(invent_id=person_id)
-multi_invent_innos=multi_invent_innos %>% rename(Ninv=N)
+test=top_rd %>% filter(`ICB3 long`=="Electronic & Electrical Equipment") %>%  arrange(`ICB3 long`,`World rank`) 
 
-
-
-aholders=fcount(holders,person_id)
-test=aholders %>% filter(N>1) # a good deal of inventors with more than one innovation
-#multi_hold_innos=holders %>% inner_join(test)
-multi_hold_innos=multi_hold_innos %>% rename(holder_id=person_id)
-multi_hold_innos=multi_hold_innos %>% rename(Nhold=N)
-
-#testLMIChold=test %>% inner_join(bigX)
-#ainventors = inventors %>% fgroup_by(person_id) %>% fsummarise(nn = fn())
-
-
-rm(aholders,ainventors,test)
-
-inv_hold=multi_invent_innos %>% inner_join(multi_hold_innos)
-
-rm(multi_hold_innos,multi_invent_innos)
-
+test %>% head(10) %>% pull(Company) %>% as.vector()
 ```
-
-
-
-```{r}
-
-dfnew=read_parquet(paste0(localbig,"\\data\\dfnew.parquet"))
-dfnew_ctry=dfnew %>% select(person_id,person_ctry_code)
-rm(dfnew)
-
-
-inv_hold = inv_hold %>% inner_dfnew()
-
-```
-
-
 
