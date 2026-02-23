@@ -382,9 +382,11 @@ feols(istrax_global ~ hicinno+hicinnoUS+hicinnoEurope+multi+CNinno+JPinno+ncount
       bigX %>% filter(HIC==0&CNid==0))
 
 
+feols(istrax_global ~ hicinno+multi,
+      bigX %>% filter(HIC==0&CNid==0))
 
 
-feols(istrax_global ~ ncountries+hicinno,
+feols(istrax_global ~ ncountries+hicinno+multi,
       bigX %>% filter(HIC==0&CNid==0))
 
 
