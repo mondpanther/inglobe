@@ -323,10 +323,10 @@ greenictid=techmap %>% filter(technology=="Any battery technology") %>% distinct
 
 
 
-istraxglobal= read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/istrax_global.fst"))
+istraxglobal= read_fst(ISEAPP_PATH_LOCAL   %>% paste0(.,"/istraxes/istrax_global.fst"))
 istraxemdeexcn= read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/istrax_emdenocn.fst"))
 istraxnational= read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/istrax_nationalkey_2009_2018.fst"))
-evglobal=read_fst(ISEAPP_PATH_LOCAL %>% paste0(.,"/istraxes/ev_global.fst"))
+evglobal=read_fst(ISEAPP_PATH_LOCAL        %>% paste0(.,"/istraxes/ev_global.fst"))
 #bigX=countrymap %>% inner_join(hicinno) %>% inner_join(istraxglobal)
 
 

@@ -1,0 +1,826 @@
+---
+title: "Prepare persons data"
+output: html_notebook
+---
+
+This notebook prepares the 
+- person/firm level identifiers
+
+```{r}
+
+library(dplyr)
+library(arrow)
+
+```
+
+
+
+```{r}
+
+source("find_dropbox.R")
+
+dropbox_root <- get_dropbox_path()  # works for personal and enterprise Dropbox
+if (is.null(dropbox_root)) stop("Dropbox folder not found. Is Dropbox installed?")
+message("Dropbox root: ", dropbox_root)
+
+inglobebig=paste0(dropbox_root,"\\Apps\\iseapp\\inglobe")
+
+```
+
+
+
+### get address data from bigquery unless already stored locally....
+
+```{r}
+personfile=paste0(inglobebig,"\\person_address.parquet")
+if (!file.exists(personfile)) {
+  library(bigrquery)
+  library(DBI)
+  
+  # Set your project ID
+  project_id <- "patbis"
+  
+  # Option 1: Direct table download
+  # Specify dataset and table name
+  dataset <- "inglobe"
+  table <- "person_address_extract"
+  
+  # Download the entire table
+  df <- bq_table_download(
+    bq_table(project_id, dataset, table)
+  )
+  library(arrow)
+  write_parquet(df,personfile)
+}
+
+persons_address=read_parquet(personfile)
+head(persons_address)
+
+```
+# Get the persons data..
+
+```{r}
+filen=paste0(inglobebig,"\\persons.parquet")
+if (!file.exists(filen)) {
+  library(bigrquery)
+  library(DBI)
+
+  # Set your project ID
+  project_id <- "patbis"
+
+  # Download selected columns from tls206_person
+  sql <- "
+    SELECT
+      person_id,
+      person_name,
+      person_ctry_code,
+      psn_name,
+      han_name,
+      psn_sector
+    FROM `patbis.fromPATSTAT2021.tls206_person`
+  "
+
+  tb <- bq_project_query(project_id, sql)
+  df <- bq_table_download(tb)
+
+  library(arrow)
+  write_parquet(df,filen)
+}
+
+persons=read_parquet(filen)
+head(persons)
+
+```
+
+### Get top 100 technology companies by R&D spending (EU Industrial R&D Investment Scoreboard)
+
+```{r}
+library(readxl)
+library(dplyr)
+library(arrow)
+
+top100file <- paste0(inglobebig, "\\top100_rd.parquet")
+if (!file.exists(top100file)) {
+  # Download the 2025 EU Industrial R&D Investment Scoreboard (World 2000)
+  # Source: https://iri.jrc.ec.europa.eu/scoreboard/2025-eu-industrial-rd-investment-scoreboard
+  scoreboard_url <- "https://iri.jrc.ec.europa.eu/sites/default/files/contentype/scoreboard/2025-12/SB2025_World2000_2.xlsx"
+
+  tmpfile <- tempfile(fileext = ".xlsx")
+  download.file(scoreboard_url, tmpfile, mode = "wb")
+
+  # Read the excel file
+  sb <- read_excel(tmpfile, sheet = 1)
+  unlink(tmpfile)
+
+  message("Columns: ", paste(names(sb), collapse = ", "))
+
+  write_parquet(sb, top100file)
+}
+
+top_rd <- read_parquet(top100file)
+head(top_rd)
+
+
+
+
+
+```
+
+
+### get docdb and application id
+
+```{r}
+
+library(fst)
+
+filen=paste0(inglobebig,"\\data\\appln_docdb.fst")
+if (!file.exists(filen)) {
+  library(bigrquery)
+  library(DBI)
+  
+  # Set your project ID
+  project_id <- "patbis"
+  
+  # Option 1: Direct table download
+  # Specify dataset and table name
+  dataset <- "fromPATSTAT2021"
+  table <- "tls201_appln"
+  
+  # Download the entire table
+  #df <- bq_table_download(
+  #  bq_table(project_id, dataset, table),
+  #  selected_fields = c("appln_id", "appln_filing_year", "docdb_familily_id")
+  #)
+  
+  
+  
+  # Use SQL to select specific columns
+  sql <- "
+    SELECT 
+      appln_id, 
+      appln_filing_year, 
+      docdb_family_id,
+      appln_nr,
+      appln_auth,
+    FROM `patbis.fromPATSTAT2021.tls201_appln`
+    WHERE appln_filing_year>=2009
+  "
+  
+  # Run query and download results
+  tb <- bq_project_query(project_id, sql)
+  df <- bq_table_download(tb)
+  
+  df=df %>% distinct()
+  
+  library(fst)
+  write_fst(df,filen,compress=100)
+}
+
+
+
+#### let's create a file with priority pats....
+  library(fst)
+  df=read_fst(filen)
+  library(data.table)
+  # Convert to data.table if not already
+  setDT(df)
+  # Method A: Using .SD
+  df <- df[order(docdb_family_id, appln_filing_year), .SD[1], by = docdb_family_id]
+  
+  
+  ISEAPP_PATH_LOCAL=paste0(dropbox_root,"\\Apps\\iseapp\\")
+  write_fst(df,paste0(ISEAPP_PATH_LOCAL,"first_appli.fst"),compress=100)
+  
+  
+  pat2009t2018=df %>% filter(appln_filing_year>=2009 & appln_filing_year<=2018)
+  pat2009t2018=pat2009t2018 %>% select(docdb_family_id)
+
+```
+
+
+## Get person data
+
+```{r}
+
+
+project_id <- "patbis"
+dataset <- "inglobe"
+
+# Define list of tables to download
+tables_to_download <- c( "holders","inventors",  "inventor_countries", "holder_countries")
+#tables_to_download <- c( "inventor_countries", "holder_countries")
+# Loop through each table
+for (table in tables_to_download) {
+  #table="holders"
+  # Create local filename
+  local_file <- paste0(inglobebig, "\\data\\", table, ".parquet")
+  
+  # Check if file already exists
+  if (!file.exists(local_file)) {
+    message("Downloading ", table, "...")
+    
+    # Download the table
+    table_data <- bq_table_download(
+      bq_table(project_id, dataset, table)
+    )
+    
+    # Save as parquet
+    write_parquet(table_data, local_file)
+    message("Saved to ", local_file)
+  } else {
+    message("File already exists: ", local_file)
+  }
+}
+
+
+```
+
+
+
+
+
+
+
+### a little check.... are high value patents MNE ones?
+
+```{r}
+library(arrow)
+# Define list of tables to read
+tables_to_read <- c("inventors","holders", "inventor_countries", "holder_countries")
+
+# Loop through each table and read into a dataframe
+for (table in tables_to_read) {
+  # Create filename
+  local_file <- paste0(inglobebig, "\\data\\", table, ".parquet")
+  
+  # Read parquet file and assign to variable with table name
+  if (file.exists(local_file)) {
+    assign(table, read_parquet(local_file))
+    message("Loaded ", table, " (", nrow(get(table)), " rows)")
+  } else {
+    warning("File not found: ", local_file)
+  }
+}
+
+
+source("prepdatahelper.r")
+
+
+holderORinventor=holder_countries %>% mutate(type="holder") %>%
+  bind_rows(inventor_countries %>% mutate(type="inventor")) %>% 
+  rename(iso2=person_ctry_code) %>% 
+  inner_join(country_income)
+
+test=holderORinventor %>% inner_join(pat2009t2018) %>% group_by(iso2,type) %>% summarize(n()) 
+
+test2=test %>% filter(iso2=="NA")
+```
+
+#### focus on holders only
+
+```{r}
+
+holders_persons=holders %>% distinct(person_id) %>% inner_join(persons)
+
+
+
+```
+
+### Match EU R&D Scoreboard companies to PATSTAT person_ids
+
+**Workflow overview:**
+
+1. Use the OpenAI API to generate known aliases, subsidiaries, and former
+   names for each of the ~2000 scoreboard companies. This creates an
+   expanded alias table (e.g. ALPHABET → GOOGLE, META → FACEBOOK).
+2. Upload the alias table to BigQuery.
+3. Match aliases against PATSTAT `han_name` using exact match on cleaned
+   names + `EDIT_DISTANCE` for close variants.
+4. Expand matched `han_id` → `person_id`, restricted to holders.
+5. Download and cache the final mapping locally.
+
+#### Step 1: Generate company aliases via OpenAI
+
+```{r}
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(stringr)
+library(arrow)
+
+aliasfile <- paste0(inglobebig, "\\scoreboard_aliases.parquet")
+
+if (!file.exists(aliasfile)) {
+
+  api_key <- Sys.getenv("OPENAI_API_KEY")
+  if (nchar(api_key) == 0) stop("Set OPENAI_API_KEY in .Renviron and restart R")
+
+  companies <- top_rd %>% pull(Company) %>% unique()
+
+  # Process in batches of 20 to keep prompt + response manageable
+  batch_size <- 20
+  batches    <- split(companies, ceiling(seq_along(companies) / batch_size))
+
+  all_aliases <- list()
+
+  for (i in seq_along(batches)) {
+    batch <- batches[[i]]
+    message("Processing batch ", i, " / ", length(batches),
+            " (", length(batch), " companies)")
+
+    company_list <- paste(batch, collapse = "\n")
+
+    prompt <- paste0(
+      "For each company listed below, provide ALL known names that this ",
+      "company might appear under in patent filings. Include:\n",
+      "- The company name itself\n",
+      "- Major subsidiaries that file patents\n",
+      "- Former names (e.g. FACEBOOK for META)\n",
+      "- Common abbreviations or trading names\n",
+      "- Regional variants (e.g. SAMSUNG ELECTRONICS, SAMSUNG SDI)\n\n",
+      "Return ONLY a JSON array of objects, each with:\n",
+      "  - \"company\": the original name exactly as given\n",
+      "  - \"aliases\": array of strings (patent filing names, UPPERCASE)\n\n",
+      "Do NOT include legal suffixes (Inc, Ltd, Corp, GmbH, etc.) in aliases.\n",
+      "Focus on names that would appear in patent databases.\n",
+      "Return valid JSON only, no markdown, no commentary.\n\n",
+      "Companies:\n", company_list
+    )
+
+    resp <- request("https://api.openai.com/v1/chat/completions") %>%
+      req_headers(
+        "Authorization" = paste("Bearer", api_key),
+        "Content-Type"  = "application/json"
+      ) %>%
+      req_body_json(list(
+        model       = "gpt-4o-mini",
+        temperature = 0,
+        messages    = list(
+          list(role = "system",
+               content = "You are a corporate research assistant with deep knowledge of multinational companies, their subsidiaries, former names, and patent filing entities. Return only valid JSON."),
+          list(role = "user", content = prompt)
+        )
+      )) %>%
+      req_timeout(120) %>%
+      req_retry(max_tries = 3, backoff = ~ 5) %>%
+      req_perform()
+
+    content <- resp_body_json(resp)
+    reply   <- content$choices[[1]]$message$content
+
+    # Clean up response: strip markdown fences if present
+    reply <- str_replace_all(reply, "^```json\\s*|```\\s*$", "")
+
+    parsed <- tryCatch(
+      fromJSON(reply, simplifyDataFrame = FALSE),
+      error = function(e) {
+        message("  JSON parse error in batch ", i, ": ", e$message)
+        message("  Raw reply (first 500 chars): ", substr(reply, 1, 500))
+        return(NULL)
+      }
+    )
+
+    if (!is.null(parsed)) {
+      for (item in parsed) {
+        company_name <- item$company
+        aliases      <- unlist(item$aliases)
+        if (length(aliases) > 0) {
+          all_aliases[[length(all_aliases) + 1]] <- tibble(
+            company_raw = company_name,
+            alias       = toupper(trimws(aliases))
+          )
+        }
+      }
+    }
+
+    # Respect rate limits
+    Sys.sleep(1)
+  }
+
+  alias_table <- bind_rows(all_aliases) %>% distinct()
+  message("Generated ", nrow(alias_table), " aliases for ",
+          n_distinct(alias_table$company_raw), " companies")
+
+  write_parquet(alias_table, aliasfile)
+}
+
+alias_table <- read_parquet(aliasfile)
+message("Alias table: ", nrow(alias_table), " aliases for ",
+        n_distinct(alias_table$company_raw), " companies")
+
+# Quick look
+alias_table %>% group_by(company_raw) %>%
+  summarise(n_aliases = n(), .groups = "drop") %>%
+  arrange(desc(n_aliases)) %>% head(10)
+
+```
+
+#### Step 2: Clean aliases and upload to BigQuery
+
+```{r}
+library(bigrquery)
+library(dplyr)
+library(stringr)
+library(arrow)
+
+project_id <- "patbis"
+dataset    <- "inglobe"
+
+# Clean alias names: strip legal suffixes and punctuation (same treatment
+# we will apply to han_name on the BigQuery side)
+alias_clean <- alias_table %>%
+  mutate(
+    alias_clean = alias %>%
+      toupper() %>%
+      str_replace_all("[.,;:!?'\"\\-]", " ") %>%
+      str_replace_all(
+        "\\b(PLC|LTD|LIMITED|INC|INCORPORATED|CORP|CORPORATION|CO|COMPANY|GROUP|HOLDINGS|HOLDING|AG|GMBH|SA|SPA|NV|BV|SE|AS|KK|OYJ|AB|A/S|SRL|LLC|LP|& CO)\\b",
+        ""
+      ) %>%
+      str_replace_all("\\s+", " ") %>%
+      str_trim()
+  ) %>%
+  filter(nchar(alias_clean) >= 2) %>%
+  distinct()
+
+# Upload to BigQuery
+bq_table_upload(
+  x = bq_table(project_id, dataset, "scoreboard_aliases"),
+  values = alias_clean,
+  write_disposition = "WRITE_TRUNCATE"
+)
+message("Uploaded ", nrow(alias_clean), " cleaned aliases to BigQuery")
+
+```
+
+
+#### Step 3: Match aliases against PATSTAT han_name on BigQuery
+
+We use exact match on cleaned names plus `EDIT_DISTANCE` for close
+variants. The normalized edit distance (edit_distance / max_length)
+must be below 0.15 to qualify, which catches typos and minor
+abbreviation differences but rejects unrelated names.
+
+```{r}
+matchfile <- paste0(inglobebig, "\\scoreboard_person_mapping.parquet")
+
+if (!file.exists(matchfile)) {
+
+  match_sql <- "
+    -- Clean han_name: strip legal suffixes, uppercase, trim
+    WITH clean_han AS (
+      SELECT DISTINCT
+        han_id,
+        han_name,
+        TRIM(REGEXP_REPLACE(
+          UPPER(han_name),
+          r'\\b(PLC|LTD|LIMITED|INC|INCORPORATED|CORP|CORPORATION|CO|COMPANY|GROUP|HOLDINGS|HOLDING|AG|GMBH|SA|SPA|NV|BV|SE|AS|KK|OYJ|AB|SRL|LLC|LP|& CO)\\b',
+          ''
+        )) AS han_clean
+      FROM `patbis.fromPATSTAT2021.tls206_person`
+      WHERE psn_sector = 'COMPANY'
+        AND han_name IS NOT NULL
+        AND TRIM(han_name) != ''
+    ),
+
+    -- Stage 1: exact match on cleaned names
+    exact_matches AS (
+      SELECT
+        a.company_raw,
+        a.alias,
+        a.alias_clean,
+        ch.han_id,
+        ch.han_name,
+        ch.han_clean,
+        'exact' AS match_type
+      FROM `patbis.inglobe.scoreboard_aliases` a
+      INNER JOIN clean_han ch
+        ON UPPER(TRIM(ch.han_clean)) = UPPER(TRIM(a.alias_clean))
+    ),
+
+    -- Stage 2: EDIT_DISTANCE for close variants (only for aliases not
+    -- yet matched exactly). We restrict candidates by requiring the
+    -- first 3 characters to match (cheap blocking) and the lengths
+    -- to be within 3 of each other, then apply EDIT_DISTANCE.
+    unmatched_aliases AS (
+      SELECT a.*
+      FROM `patbis.inglobe.scoreboard_aliases` a
+      LEFT JOIN exact_matches em
+        ON a.company_raw = em.company_raw
+        AND a.alias_clean = em.alias_clean
+      WHERE em.company_raw IS NULL
+        AND LENGTH(TRIM(a.alias_clean)) >= 4
+    ),
+
+    fuzzy_matches AS (
+      SELECT
+        ua.company_raw,
+        ua.alias,
+        ua.alias_clean,
+        ch.han_id,
+        ch.han_name,
+        ch.han_clean,
+        'fuzzy' AS match_type
+      FROM unmatched_aliases ua
+      CROSS JOIN clean_han ch
+      WHERE
+        -- Blocking: first 3 chars must match
+        SUBSTR(UPPER(TRIM(ch.han_clean)), 1, 3)
+          = SUBSTR(UPPER(TRIM(ua.alias_clean)), 1, 3)
+        -- Length must be within 3 characters
+        AND ABS(LENGTH(TRIM(ch.han_clean)) - LENGTH(TRIM(ua.alias_clean))) <= 3
+        -- Normalized edit distance < 0.15
+        AND EDIT_DISTANCE(
+              UPPER(TRIM(ch.han_clean)),
+              UPPER(TRIM(ua.alias_clean)),
+              max_distance => 5
+            ) < GREATEST(LENGTH(TRIM(ch.han_clean)), LENGTH(TRIM(ua.alias_clean))) * 0.15
+    ),
+
+    -- Combine
+    all_matches AS (
+      SELECT * FROM exact_matches
+      UNION ALL
+      SELECT * FROM fuzzy_matches
+    )
+
+    -- Expand to person_id level, restricted to holders
+    SELECT DISTINCT
+      m.company_raw,
+      m.alias,
+      m.match_type,
+      m.han_id,
+      m.han_name,
+      p.person_id,
+      p.person_name,
+      p.person_ctry_code
+    FROM all_matches m
+    INNER JOIN `patbis.fromPATSTAT2021.tls206_person` p
+      ON m.han_id = p.han_id
+    INNER JOIN (
+      SELECT DISTINCT person_id
+      FROM `patbis.inglobe.holders`
+    ) h
+      ON p.person_id = h.person_id
+  "
+
+  message("Running matching query on BigQuery...")
+  tb <- bq_project_query(project_id, match_sql)
+  scoreboard_person_mapping <- bq_table_download(tb)
+
+  write_parquet(scoreboard_person_mapping, matchfile)
+  message("Saved ", nrow(scoreboard_person_mapping), " rows to ", matchfile)
+}
+
+scoreboard_person_mapping <- read_parquet(matchfile)
+
+
+n_distinct(scoreboard_person_mapping$company_raw)
+test=scoreboard_person_mapping %>% distinct(company_raw)
+```
+
+#### Step 4: Local fuzzy matching fallback for remaining unmatched companies
+
+```{r}
+library(stringdist)
+
+# Which scoreboard companies got zero matches?
+matched_companies   <- unique(scoreboard_person_mapping$company_raw)
+all_companies       <- unique(top_rd$Company)
+unmatched_companies <- setdiff(all_companies, matched_companies)
+
+message("Matched: ", length(matched_companies), " / ", length(all_companies))
+message("Unmatched: ", length(unmatched_companies))
+
+if (length(unmatched_companies) > 0) {
+
+  # Download distinct company han_names from BigQuery (small table)
+  han_sql <- "
+    SELECT DISTINCT han_id, han_name
+    FROM `patbis.fromPATSTAT2021.tls206_person`
+    WHERE psn_sector = 'COMPANY'
+      AND han_name IS NOT NULL
+      AND TRIM(han_name) != ''
+  "
+  tb2 <- bq_project_query(project_id, han_sql)
+  distinct_han <- bq_table_download(tb2)
+  message("Downloaded ", nrow(distinct_han), " distinct company han_names")
+
+  # Clean name helper
+  clean_name <- function(x) {
+    x %>% toupper() %>%
+      str_replace_all("[.,;:!?'\"\\-]", " ") %>%
+      str_replace_all(
+        "\\b(PLC|LTD|LIMITED|INC|INCORPORATED|CORP|CORPORATION|CO|COMPANY|GROUP|HOLDINGS|HOLDING|AG|GMBH|SA|SPA|NV|BV|SE|AS|KK|OYJ|AB|A/S|SRL|LLC|LP|& CO)\\b",
+        ""
+      ) %>%
+      str_replace_all("\\s+", " ") %>%
+      str_trim()
+  }
+
+  # Build a search table that retains the link back to company_raw
+  search_df <- bind_rows(
+    # The company names themselves
+    tibble(company_raw = unmatched_companies,
+           alias       = unmatched_companies),
+    # Their aliases
+    alias_table %>% filter(company_raw %in% unmatched_companies)
+  ) %>%
+    distinct() %>%
+    mutate(alias_clean = clean_name(alias))
+
+  han_cleaned <- clean_name(distinct_han$han_name)
+
+  message("Fuzzy matching ", nrow(search_df), " names against ",
+          length(han_cleaned), " han_names...")
+
+  # Jaro-Winkler fuzzy match
+  match_idx <- amatch(search_df$alias_clean, han_cleaned,
+                      method = "jw", maxDist = 0.03)
+
+  # Collect results with company_raw linkage
+  fuzzy_hits <- search_df %>%
+    mutate(han_idx = match_idx) %>%
+    filter(!is.na(han_idx)) %>%
+    mutate(
+      han_name = distinct_han$han_name[han_idx],
+      han_id   = distinct_han$han_id[han_idx],
+      jw_dist  = stringdist(alias_clean, han_cleaned[han_idx], method = "jw")
+    )
+
+  if (nrow(fuzzy_hits) > 0) {
+    message("Local fuzzy matching found ", nrow(fuzzy_hits), " additional han_name matches")
+    print(fuzzy_hits %>% select(company_raw, alias_clean, han_name, jw_dist))
+
+    # Expand han_id -> person_id via BigQuery (upload matched han_ids, join there)
+    fuzzy_han_ids <- fuzzy_hits %>% select(company_raw, alias, han_id, han_name) %>% distinct()
+
+    bq_table_upload(
+      x = bq_table(project_id, dataset, "fuzzy_han_matches"),
+      values = fuzzy_han_ids,
+      write_disposition = "WRITE_TRUNCATE"
+    )
+
+    expand_sql <- "
+      SELECT DISTINCT
+        f.company_raw,
+        f.alias,
+        'local_fuzzy' AS match_type,
+        f.han_id,
+        f.han_name,
+        p.person_id,
+        p.person_name,
+        p.person_ctry_code
+      FROM `patbis.inglobe.fuzzy_han_matches` f
+      INNER JOIN `patbis.fromPATSTAT2021.tls206_person` p
+        ON f.han_id = p.han_id
+      INNER JOIN (
+        SELECT DISTINCT person_id
+        FROM `patbis.inglobe.holders`
+      ) h
+        ON p.person_id = h.person_id
+    "
+    tb3 <- bq_project_query(project_id, expand_sql)
+    fuzzy_expanded <- bq_table_download(tb3)
+
+    message("Fuzzy matches expanded to ", nrow(fuzzy_expanded), " person_id rows")
+
+    # Merge into main mapping
+    scoreboard_person_mapping <- bind_rows(
+      scoreboard_person_mapping,
+      fuzzy_expanded
+    ) %>% distinct()
+
+    # Re-save the combined mapping
+    write_parquet(scoreboard_person_mapping, matchfile)
+    message("Updated mapping saved: ", nrow(scoreboard_person_mapping), " total rows")
+
+  } else {
+    message("No additional fuzzy matches found")
+  }
+}
+
+```
+
+
+#### Step 5: Coverage report
+
+```{r}
+n_matched <- n_distinct(scoreboard_person_mapping$company_raw)
+n_total   <- n_distinct(top_rd$Company)
+message("Final coverage: ", n_matched, " / ", n_total, " scoreboard companies matched")
+
+# Companies with most person_id matches (sanity check)
+scoreboard_person_mapping %>%
+  group_by(company_raw, match_type) %>%
+  summarise(n_person_ids = n_distinct(person_id), .groups = "drop") %>%
+  arrange(desc(n_person_ids)) %>%
+  head(20)
+
+# Unmatched companies
+unmatched_final <- top_rd %>%
+  distinct(Company) %>%
+  anti_join(scoreboard_person_mapping, by = c("Company" = "company_raw"))
+if (nrow(unmatched_final) > 0) {
+  message("Still unmatched (", nrow(unmatched_final), " companies):")
+  print(unmatched_final$Company)
+}
+
+```
+
+#### Step 6: Map scoreboard companies to patent families (docdb_family_id)
+
+Join `scoreboard_person_mapping` (company_raw → person_id) with both
+`holders` and `inventors` to capture patent families where the company
+appears as either assignee or inventor. Combine the unique mappings.
+
+```{r}
+library(dplyr)
+library(arrow)
+
+firmmap_file <- paste0(dropbox_root, "\\Apps\\iseapp\\firmmap.parquet")
+
+person_ids <- scoreboard_person_mapping %>%
+  select(company_raw, person_id) %>%
+  distinct()
+
+# Match via holders (company as patent assignee/owner)
+firmmap_holders <- person_ids %>%
+  inner_join(holders, by = "person_id") %>%
+  select(company_raw, docdb_family_id) %>%
+  distinct()
+message("Via holders: ", nrow(firmmap_holders), " company-family pairs")
+
+# Match via inventors (company as inventor — applies to corporate inventors)
+firmmap_inventors <- person_ids %>%
+  inner_join(inventors, by = "person_id") %>%
+  select(company_raw, docdb_family_id) %>%
+  distinct()
+message("Via inventors: ", nrow(firmmap_inventors), " company-family pairs")
+
+# Combine and deduplicate
+firmmap <- bind_rows(firmmap_holders, firmmap_inventors) %>%
+  distinct()
+
+message("Combined firm map: ", nrow(firmmap), " rows mapping ",
+        n_distinct(firmmap$company_raw), " companies to ",
+        n_distinct(firmmap$docdb_family_id), " patent families")
+
+write_parquet(firmmap, firmmap_file)
+message("Saved to ", firmmap_file)
+
+head(firmmap)
+
+# Quick summary: patents per company
+firmmap %>%
+  group_by(company_raw) %>%
+  summarise(n_families = n_distinct(docdb_family_id), .groups = "drop") %>%
+  arrange(desc(n_families)) %>%
+  head(20)
+
+
+firmmap %>% distinct(docdb_family_id) %>% nrow()
+
+
+```
+
+#### Step 7: Create firm sector mapping
+
+Map each company to its ICB3 sector classification from the scoreboard.
+
+```{r}
+library(dplyr)
+library(arrow)
+
+# Identify the ICB3 long column name (may vary across scoreboard editions)
+icb3_col <- grep("ICB3.*long|ICB3_long", names(top_rd), value = TRUE, ignore.case = TRUE)
+if (length(icb3_col) == 0) {
+  message("Available columns: ", paste(names(top_rd), collapse = ", "))
+  stop("Could not find ICB3 long column in top_rd")
+}
+message("Using column: ", icb3_col[1])
+
+firmsectormap <- top_rd %>%
+  select(company_raw = Company, sector = all_of(icb3_col[1]),
+         RnD = `R&D (€million)`) %>%
+  distinct() %>%
+  filter(company_raw %in% unique(firmmap$company_raw))
+
+message("Firm sector map: ", nrow(firmsectormap), " companies with sector classification")
+
+sectormap_file <- paste0(dropbox_root, "\\Apps\\iseapp\\firmsectormap.parquet")
+write_parquet(firmsectormap, sectormap_file)
+message("Saved to ", sectormap_file)
+
+# Summary by sector
+firmsectormap %>%
+  group_by(sector) %>%
+  summarise(n_companies = n(), .groups = "drop") %>%
+  arrange(desc(n_companies))
+
+
+test=top_rd %>% filter(`ICB3 long`=="Electronic & Electrical Equipment") %>%  arrange(`ICB3 long`,`World rank`) 
+
+test %>% head(10) %>% pull(Company) %>% as.vector()
+```
+
