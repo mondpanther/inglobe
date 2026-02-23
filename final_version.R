@@ -5,7 +5,7 @@ library(dplyr)
 library(arrow)
 
 # Load data from Parquet file
-df_long <- read_parquet("C:/Users/aforest/OneDrive - WBG/Desktop/Research/Open Alex/DataLab/citation_links_long_NEW_expanded_sampled.parquet")
+df_long <- read_parquet("citation_links_long_NEW_expanded_sampled.parquet")
 
 # Debug: Check what's in the data
 print(paste("Total rows loaded:", nrow(df_long)))
