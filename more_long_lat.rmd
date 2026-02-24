@@ -1,0 +1,88 @@
+---
+title: "More longitude and latitude"
+output: html_notebook
+---
+
+```{r}
+
+library(dplyr)
+library(arrow)
+```
+
+
+```{r}
+
+if (Sys.info()["nodename"] == "PCACL-9RVSQ74") {
+  datad="C:\\Users\\rmartin7\\OneDrive - WBG\\projects\\PRINZGlobal\\imperial_college_visualization\\01_data"
+  localbig="C:\\Users\\rmartin7\\OneDrive - Imperial College London\\inglobe"
+  localbigwb="C:\\Users\\rmartin7\\OneDrive - WBG\\projects\\inglobe"
+}
+
+```
+
+
+```{r}
+
+source("find_dropbox.R")
+
+dropbox_root <- get_dropbox_path()
+dropbox_dir <- file.path(dropbox_root, "Apps", "iseapp", "inglobe")
+message("Dropbox directory: ", dropbox_dir)
+
+```
+
+
+```{r}
+
+dfnew <- read_parquet(file.path(dropbox_dir, "dfnew.parquet"))
+dfnew %>% names()
+
+
+df_long <- read_parquet("citation_links_long_NEW_expanded_sampled.parquet")
+
+```
+
+
+```{r}
+
+# Read holders and inventors tables
+tables_to_read <- c("inventors", "holders", "inventor_countries", "holder_countries")
+
+for (table in tables_to_read) {
+  local_file <- file.path(dropbox_dir, "data", paste0(table, ".parquet"))
+
+  if (file.exists(local_file)) {
+    assign(table, read_parquet(local_file))
+    message("Loaded ", table, " (", nrow(get(table)), " rows)")
+  } else {
+    warning("File not found: ", local_file)
+  }
+}
+
+```
+
+
+```{r}
+
+# Combine holders and inventors, then join with dfnew to map docdb_family_id to location
+inventorsANDholders <- inventors %>% bind_rows(holders)
+inventorsANDholders <- inventorsANDholders %>% inner_join(dfnew)
+inventorsANDholders <- inventorsANDholders %>% rename(ctry_code = person_ctry_code)
+
+message("Combined mapping: ", nrow(inventorsANDholders), " rows, ",
+        n_distinct(inventorsANDholders$docdb_family_id), " unique patent families")
+inventorsANDholders %>% names()
+
+# Keep one randomly chosen observation per docdb_family_id x ctry_code group
+library(collapse)
+inventorsANDholders <- inventorsANDholders[sample(nrow(inventorsANDholders)), ] |>
+  fgroup_by(ctry_code, docdb_family_id) |>
+  ffirst()
+
+message("After dedup: ", nrow(inventorsANDholders), " rows")
+
+
+test=dfnew %>% filter(is.na(longitude))
+
+```
+
