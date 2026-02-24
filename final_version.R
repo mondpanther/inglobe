@@ -6,6 +6,7 @@ library(arrow)
 
 # Load data from Parquet file
 df_long <- read_parquet("citation_links_long_NEW_expanded_sampled.parquet")
+#df_long <- read_parquet("df_long_new.parquet")
 
 # Debug: Check what's in the data
 print(paste("Total rows loaded:", nrow(df_long)))
@@ -194,7 +195,64 @@ ui <- fluidPage(
 
 # Server
 server <- function(input, output, session) {
-  
+
+  # Restore inputs from URL query parameters on startup
+  observe({
+    query <- parseQueryString(session$clientData$url_search)
+
+    if (!is.null(query$selection_mode))
+      updateRadioButtons(session, "selection_mode", selected = query$selection_mode)
+    if (!is.null(query$country))
+      updateSelectInput(session, "country", selected = query$country)
+    if (!is.null(query$country_group))
+      updateSelectInput(session, "country_group", selected = query$country_group)
+    if (!is.null(query$tech_selection_mode))
+      updateRadioButtons(session, "tech_selection_mode", selected = query$tech_selection_mode)
+    if (!is.null(query$technology))
+      updateSelectInput(session, "technology", selected = query$technology)
+    if (!is.null(query$tech_group))
+      updateSelectInput(session, "tech_group", selected = query$tech_group)
+    if (!is.null(query$sample_size))
+      updateSelectInput(session, "sample_size", selected = query$sample_size)
+    if (!is.null(query$max_generation))
+      updateSliderInput(session, "max_generation", value = as.numeric(query$max_generation))
+  }) |> bindEvent(session$clientData$url_search, once = TRUE)
+
+  # Update URL query string whenever inputs change
+  observe({
+    params <- list(
+      selection_mode     = input$selection_mode,
+      tech_selection_mode = input$tech_selection_mode,
+      sample_size        = input$sample_size,
+      max_generation     = input$max_generation
+    )
+
+    # Add the relevant country/group input based on selection mode
+    if (input$selection_mode == "country") {
+      if (!is.null(input$country) && input$country != "")
+        params$country <- input$country
+    } else {
+      if (!is.null(input$country_group) && input$country_group != "")
+        params$country_group <- input$country_group
+    }
+
+    # Add the relevant technology/group input based on tech selection mode
+    if (input$tech_selection_mode == "technology") {
+      if (!is.null(input$technology) && input$technology != "")
+        params$technology <- input$technology
+    } else {
+      if (!is.null(input$tech_group) && input$tech_group != "")
+        params$tech_group <- input$tech_group
+    }
+
+    # Remove empty/NULL entries
+    params <- params[!sapply(params, function(x) is.null(x) || x == "")]
+
+    # Build query string and push to browser URL
+    query_string <- paste0("?", paste(names(params), sapply(params, URLencode, reserved = TRUE), sep = "=", collapse = "&"))
+    updateQueryString(query_string, mode = "push")
+  })
+
   # Initial map render
   output$map <- renderLeaflet({
     leaflet() %>%

@@ -37,6 +37,105 @@ message("Dropbox directory: ", dropbox_dir)
 dfnew <- read_parquet(file.path(dropbox_dir, "dfnew.parquet"))
 dfnew %>% names()
 
+message("Missing lon/lat with country code: ",
+        dfnew %>% filter(is.na(longitude) & !is.na(person_ctry_code)) %>% nrow())
+
+```
+
+
+```{r}
+
+# Capital city coordinates as fallback for missing lon/lat
+capital_coords <- data.frame(
+  iso2 = c(
+    "AF", "AL", "DZ", "AD", "AO", "AG", "AR", "AM", "AU", "AT",
+    "AZ", "BS", "BH", "BD", "BB", "BY", "BE", "BZ", "BJ", "BT",
+    "BO", "BA", "BW", "BR", "BN", "BG", "BF", "BI", "KH", "CM",
+    "CA", "CV", "CF", "TD", "CL", "CN", "CO", "KM", "CG", "CD",
+    "CR", "CI", "HR", "CU", "CY", "CZ", "DK", "DJ", "DM", "DO",
+    "EC", "EG", "SV", "GQ", "ER", "EE", "ET", "FJ", "FI", "FR",
+    "GA", "GM", "GE", "DE", "GH", "GR", "GD", "GT", "GN", "GW",
+    "GY", "HT", "HN", "HU", "IS", "IN", "ID", "IR", "IQ", "IE",
+    "IL", "IT", "JM", "JP", "JO", "KZ", "KE", "KI", "KP", "KR",
+    "KW", "KG", "LA", "LV", "LB", "LS", "LR", "LY", "LI", "LT",
+    "LU", "MK", "MG", "MW", "MY", "MV", "ML", "MT", "MH", "MR",
+    "MU", "MX", "FM", "MD", "MC", "MN", "ME", "MA", "MZ", "MM",
+    "NA", "NR", "NP", "NL", "NZ", "NI", "NE", "NG", "NO", "OM",
+    "PK", "PW", "PS", "PA", "PG", "PY", "PE", "PH", "PL", "PT",
+    "QA", "RO", "RU", "RW", "KN", "LC", "VC", "WS", "SM", "ST",
+    "SA", "SN", "RS", "SC", "SL", "SG", "SK", "SI", "SB", "SO",
+    "ZA", "SS", "ES", "LK", "SD", "SR", "SZ", "SE", "CH", "SY",
+    "TW", "TJ", "TZ", "TH", "TL", "TG", "TO", "TT", "TN", "TR",
+    "TM", "TV", "UG", "UA", "AE", "GB", "US", "UY", "UZ", "VU",
+    "VA", "VE", "VN", "YE", "ZM", "ZW"
+  ),
+  latitude = c(
+    34.5553, 41.3275, 36.7538, 42.5063, -8.8383, 17.1175, -34.6037, 40.1792, -35.2809, 48.2082,
+    40.4093, 25.0343, 26.0667, 23.8103, 13.0969, 53.9045, 50.8503, 17.2510, 6.4969, 27.4728,
+    -19.0196, 43.8564, -24.6282, -15.8267, 4.8895, 42.6977, 12.3714, -3.3731, 11.5564, 3.8480,
+    45.4215, 14.9177, 4.3947, 12.1348, -33.4489, 39.9042, 4.7110, -11.7172, -4.2634, -4.4419,
+    9.9281, 6.8270, 45.8150, 23.1136, 35.1856, 50.0755, 55.6761, 11.8251, 15.3017, 18.4861,
+    -0.1807, 30.0444, 13.6929, 3.7504, 15.3229, 59.4370, 9.0320, -18.1248, 60.1699, 48.8566,
+    0.4162, 13.4549, 41.7151, 52.5200, 5.6037, 37.9838, 12.0561, 14.6349, 9.6412, 11.8637,
+    6.8013, 18.5944, 14.0723, 47.4979, 64.1466, 28.6139, -6.2088, 35.6892, 33.3152, 53.3498,
+    31.7683, 41.9028, 17.9714, 35.6762, 31.9454, 51.1694, -1.2921, 1.3382, 39.0392, 37.5665,
+    29.3759, 42.8746, 17.9757, 56.9496, 33.8938, -29.3167, 6.3156, 32.8872, 47.1410, 54.6872,
+    49.6116, 41.9973, -18.8792, -13.9626, 3.1390, 4.1755, 12.6392, 35.8989, 7.0897, 18.0735,
+    -20.1609, 19.4326, 6.9147, 47.0105, 43.7384, 47.9186, 42.4304, 34.0209, -25.9655, 19.7633,
+    -22.5597, -0.5477, 27.7172, 52.3676, -41.2865, 12.1150, 13.5127, 9.0765, 59.9139, 23.5880,
+    33.6844, 7.5006, 31.9522, 8.9824, -9.4438, -25.2637, -12.0464, 14.5995, 52.2297, 38.7223,
+    25.2854, 44.4268, 55.7558, -1.9403, 17.3026, 13.9094, 13.4877, -13.8333, 43.9424, 0.3364,
+    24.7136, 14.7167, 44.7866, -4.6796, 8.4657, 1.3521, 48.1486, 46.0569, -9.4456, 2.0469,
+    -25.7479, 4.8517, 40.4168, 6.9271, 15.5007, 5.8520, -26.3054, 59.3293, 46.9481, 33.5138,
+    25.0330, 38.5598, -6.7924, 13.7563, -8.5569, 6.1256, -21.1789, 10.6918, 11.8745, 39.9334,
+    37.9601, -8.5211, 0.3476, 50.4501, 24.4539, 51.5074, 38.9072, -34.9011, 41.2995, -17.7334,
+    41.9029, 10.4806, 21.0285, 15.5527, -15.4167, -17.8252
+  ),
+  longitude = c(
+    69.2075, 19.8187, 3.0588, 1.5218, 13.2344, -61.8456, -58.3816, 44.4991, 149.1300, 16.3738,
+    49.8671, -77.3963, 50.5577, 90.4125, -59.6162, 27.5615, 4.3517, -88.7590, 2.6289, 89.6390,
+    -65.2627, 18.4131, 25.9231, -47.9292, 114.9400, 23.3219, -1.5247, 29.8739, 104.9282, 11.5021,
+    -75.6972, -23.5087, 18.5582, 15.0445, -70.6693, 116.4074, -74.0721, 43.2551, 15.2662, 15.2663,
+    -84.0907, -5.2893, 15.9819, -82.3666, 33.3823, 14.4378, 12.5683, 43.1456, -61.3870, -69.9312,
+    -78.4678, 31.2357, -89.2182, 8.7832, 38.9251, 24.7536, 38.7469, 178.4419, 24.9384, 2.3522,
+    9.4673, -16.5790, 44.8271, 13.4050, -0.1870, 23.7275, -61.7480, -90.5069, -13.5784, -15.5989,
+    -58.1551, -72.3074, -87.2068, 19.0402, -21.9426, 77.2090, 106.8456, 51.3890, 44.3661, -6.2603,
+    35.2137, 12.4964, -76.7931, 139.6503, 35.9284, 71.4704, 36.8219, 172.9790, 125.7625, 126.9780,
+    47.9774, 74.5698, 102.6000, 24.1052, 35.4953, 27.4974, -10.7969, 13.1913, 9.5215, 25.2797,
+    6.1296, 21.4314, 47.5079, 33.7738, 101.6869, 73.5093, -8.0029, 14.5146, 171.1845, -15.9582,
+    57.5012, -99.1332, 158.1611, 28.8497, 7.4246, 106.9057, 19.2594, -6.8498, 32.5732, 96.1561,
+    17.0832, 166.9315, 85.3240, 4.9041, 174.7633, -86.2362, 2.1254, 7.4951, 10.7522, 58.4059,
+    73.0479, 134.4893, 35.2332, -79.5199, 147.1803, -57.5759, -77.0428, 120.9842, 21.0122, -9.1393,
+    51.5310, 26.1025, 37.6173, -1.9536, -62.7177, -60.9789, -61.2248, -171.7667, 12.4578, 6.7273,
+    46.7160, -17.4467, 20.4489, 55.4540, -13.2317, 103.8198, 17.1077, 14.5058, 159.9729, 45.3182,
+    28.1879, 31.5825, -3.7038, 79.8612, 32.5599, -55.2038, 31.1367, 18.0686, 7.4474, 36.2765,
+    121.5654, 68.7870, 35.7516, 100.5018, 125.5603, 1.2313, -175.1982, -61.5089, 10.1815, 32.8597,
+    58.3260, 179.1942, 32.5825, 30.5234, 54.3773, -0.1278, -77.0369, -56.1645, 69.2401, 168.3273,
+    12.4534, -66.8792, 105.8542, 44.2070, 28.2871, 31.0522
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Fill missing lon/lat in dfnew using capital city coordinates
+# Only join on the small subset with missing coords to avoid a huge left_join
+#dfnew_ok      <- dfnew %>% filter(!is.na(longitude))
+dfnew_missing <- dfnew %>% filter(is.na(longitude) & !is.na(person_ctry_code))
+
+capital_coords <- capital_coords %>% rename(person_ctry_code = iso2)
+
+dfnew_fixed <- dfnew_missing %>%
+  select(person_id, person_ctry_code) %>%
+  left_join(capital_coords, by = "person_ctry_code")
+
+dfnew <-dfnew %>% filter(!is.na(longitude)) %>%  bind_rows(dfnew_fixed)
+
+message("Still missing lon/lat with country code: ",
+        dfnew %>% filter(is.na(longitude) & !is.na(person_ctry_code)) %>% nrow())
+
+```
+
+
+```{r}
 
 df_long <- read_parquet("citation_links_long_NEW_expanded_sampled.parquet")
 
@@ -83,6 +182,45 @@ message("After dedup: ", nrow(inventorsANDholders), " rows")
 
 
 test=dfnew %>% filter(is.na(longitude))
+
+```
+
+
+```{r}
+
+# Update df_long with better lon/lat from inventorsANDholders
+# Prepare a slim lookup: docdb_family_id + ctry_code -> longitude, latitude
+ih_lookup <- inventorsANDholders %>%
+  select(docdb_family_id, ctry_code, longitude, latitude)
+
+# Step 1: Update from_lat/from_lon by joining on from_id/from_ctry
+df_long_new <- df_long %>%
+  left_join(ih_lookup %>% rename(lon_new = longitude, lat_new = latitude),
+            by = c("from_id" = "docdb_family_id", "from_ctry" = "ctry_code")) %>%
+  mutate(
+    from_lon = ifelse(!is.na(lon_new), lon_new, from_lon),
+    from_lat = ifelse(!is.na(lat_new), lat_new, from_lat)
+  ) %>%
+  select(-lon_new, -lat_new)
+
+# Step 2: Update to_lat/to_lon by joining on to_id/to_ctry
+df_long_new <- df_long_new %>%
+  left_join(ih_lookup %>% rename(lon_new = longitude, lat_new = latitude),
+            by = c("to_id" = "docdb_family_id", "to_ctry" = "ctry_code")) %>%
+  mutate(
+    to_lon = ifelse(!is.na(lon_new), lon_new, to_lon),
+    to_lat = ifelse(!is.na(lat_new), lat_new, to_lat)
+  ) %>%
+  select(-lon_new, -lat_new)
+
+message("df_long_new: ", nrow(df_long_new), " rows")
+message("from missing lon: ", sum(is.na(df_long_new$from_lon)),
+        " -> was: ", sum(is.na(df_long$from_lon)))
+message("to missing lon: ", sum(is.na(df_long_new$to_lon)),
+        " -> was: ", sum(is.na(df_long$to_lon)))
+
+
+write_parquet(df_long_new,"df_long_new.parquet")
 
 ```
 
