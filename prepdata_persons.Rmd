@@ -700,6 +700,9 @@ if (length(unmatched_companies) > 0) {
   }
 }
 
+
+scoreboard_person_mapping =read_parquet( matchfile)
+
 ```
 
 
@@ -762,7 +765,15 @@ message("Via inventors: ", nrow(firmmap_inventors), " company-family pairs")
 firmmap <- bind_rows(firmmap_holders, firmmap_inventors) %>%
   distinct()
 
-message("Combined firm map: ", nrow(firmmap), " rows mapping ",
+message("Combined firm map (before countrymap filter): ", nrow(firmmap), " rows")
+
+# Restrict to patent families that appear in countrymap
+library(fst)
+countrymap <- read_fst(paste0(dropbox_root, "\\Apps\\iseapp\\countrymap.fst"))
+firmmap <- firmmap %>%
+  semi_join(countrymap, by = "docdb_family_id")
+
+message("After countrymap filter: ", nrow(firmmap), " rows mapping ",
         n_distinct(firmmap$company_raw), " companies to ",
         n_distinct(firmmap$docdb_family_id), " patent families")
 
@@ -822,5 +833,12 @@ firmsectormap %>%
 test=top_rd %>% filter(`ICB3 long`=="Electronic & Electrical Equipment") %>%  arrange(`ICB3 long`,`World rank`) 
 
 test %>% head(10) %>% pull(Company) %>% as.vector()
+
+
+filen=paste0(dropbox_root,"/iseapp/countrymap.fst")
+library(fst)
+countrymap=read.fst(filen)
+countrymap %>% distinct(docdb_family_id) %>% nrow()
+
 ```
 
