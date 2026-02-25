@@ -878,7 +878,7 @@ recursive_mapbox=function(){
 
   df_filtered=df_filtered %>% mutate(rr=runif(1:n()))  %>% arrange(rr) %>% select(-rr)
 
-  some_addresses=df_filtered %>% head(20000) %>%  mutate(addressstr=paste(person_address,person_ctry_code,sep=","))
+  some_addresses=df_filtered %>% head(10000) %>%  mutate(addressstr=paste(person_address,person_ctry_code,sep=","))
   print(nrow(df_filtered))
   lat_longs_mapbox2 <- some_addresses %>%
     geocode(addressstr, method = 'mapbox', lat = latitude , long = longitude,full_results=F)
