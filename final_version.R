@@ -248,8 +248,8 @@ server <- function(input, output, session) {
     # Remove empty/NULL entries
     params <- params[!sapply(params, function(x) is.null(x) || x == "")]
 
-    # Build query string and push to browser URL
-    query_string <- paste0("?", paste(names(params), sapply(params, URLencode, reserved = TRUE), sep = "=", collapse = "&"))
+    # Build query string and push to browser URL (coerce all values to character for URLencode)
+    query_string <- paste0("?", paste(names(params), sapply(params, function(x) URLencode(as.character(x), reserved = TRUE)), sep = "=", collapse = "&"))
     updateQueryString(query_string, mode = "push")
   })
 

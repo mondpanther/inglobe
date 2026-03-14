@@ -76,6 +76,7 @@ if (!file.exists(filen)) {
       person_ctry_code,
       psn_name,
       han_name,
+      han_id,
       psn_sector
     FROM `patbis.fromPATSTAT2021.tls206_person`
   "
@@ -92,7 +93,10 @@ head(persons)
 
 ```
 
-### Get top 100 technology companies by R&D spending (EU Industrial R&D Investment Scoreboard)
+### Get top 2000 technology companies by R&D spending (EU Industrial R&D Investment Scoreboard)
+
+Note: dataframe is still called top100 as we initially were only hoping for 100
+firms...
 
 ```{r}
 library(readxl)
@@ -277,6 +281,8 @@ test2=test %>% filter(iso2=="NA")
 ```
 
 #### focus on holders only
+
+...actually no longer true...let's combine all...
 
 ```{r}
 
@@ -703,6 +709,14 @@ if (length(unmatched_companies) > 0) {
 
 scoreboard_person_mapping =read_parquet( matchfile)
 
+# Upload to BigQuery
+bq_table_upload(
+  x = bq_table(project_id, dataset, "scoreboard_person_mapping"),
+  values = scoreboard_person_mapping,
+  write_disposition = "WRITE_TRUNCATE"
+)
+message("Uploaded ", nrow(scoreboard_person_mapping), " rows to patbis.inglobe.scoreboard_person_mapping")
+
 ```
 
 
@@ -779,6 +793,8 @@ message("After countrymap filter: ", nrow(firmmap), " rows mapping ",
 
 write_parquet(firmmap, firmmap_file)
 message("Saved to ", firmmap_file)
+
+firmmap=read_parquet( firmmap_file)
 
 head(firmmap)
 
