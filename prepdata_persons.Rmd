@@ -57,6 +57,7 @@ persons_address=read_parquet(personfile)
 head(persons_address)
 
 ```
+
 # Get the persons data..
 
 ```{r}
@@ -76,7 +77,6 @@ if (!file.exists(filen)) {
       person_ctry_code,
       psn_name,
       han_name,
-      han_id,
       psn_sector
     FROM `patbis.fromPATSTAT2021.tls206_person`
   "
@@ -93,39 +93,96 @@ head(persons)
 
 ```
 
-### Get top 2000 technology companies by R&D spending (EU Industrial R&D Investment Scoreboard)
 
-Note: dataframe is still called top100 as we initially were only hoping for 100
-firms...
+## only persond_id and han_id
+```{r}
+filen=paste0(inglobebig,"\\persons_han_only.parquet")
+if (!file.exists(filen)) {
+  library(bigrquery)
+  library(DBI)
+
+  # Set your project ID
+  project_id <- "patbis"
+
+  # Download selected columns from tls206_person
+  sql <- "
+    SELECT
+      person_id,
+      han_id
+    FROM `patbis.fromPATSTAT2021.tls206_person`
+  "
+
+  tb <- bq_project_query(project_id, sql)
+  df <- bq_table_download(tb)
+
+  library(arrow)
+  write_parquet(df,filen)
+}
+
+
+```
+
+
+### Get top technology companies by R&D spending (EU Industrial R&D Investment Scoreboard)
+
+We download **both** the 2025 cross-section (for sector classification) and the
+full panel (2003–2024) so we can:
+- use the combined list of companies across all years for alias matching
+- compute total and average R&D spending over the whole period
 
 ```{r}
 library(readxl)
 library(dplyr)
 library(arrow)
 
+# --- 2025 cross-section (used for sector / ICB3 classification) ---
 top100file <- paste0(inglobebig, "\\top100_rd.parquet")
 if (!file.exists(top100file)) {
-  # Download the 2025 EU Industrial R&D Investment Scoreboard (World 2000)
-  # Source: https://iri.jrc.ec.europa.eu/scoreboard/2025-eu-industrial-rd-investment-scoreboard
   scoreboard_url <- "https://iri.jrc.ec.europa.eu/sites/default/files/contentype/scoreboard/2025-12/SB2025_World2000_2.xlsx"
-
   tmpfile <- tempfile(fileext = ".xlsx")
   download.file(scoreboard_url, tmpfile, mode = "wb")
-
-  # Read the excel file
   sb <- read_excel(tmpfile, sheet = 1)
   unlink(tmpfile)
-
-  message("Columns: ", paste(names(sb), collapse = ", "))
-
+  message("Cross-section columns: ", paste(names(sb), collapse = ", "))
   write_parquet(sb, top100file)
 }
-
 top_rd <- read_parquet(top100file)
+
+# --- Full panel (2003–2024) ---
+panel_file <- paste0(inglobebig, "\\scoreboard_panel.parquet")
+if (!file.exists(panel_file)) {
+  panel_url <- "https://iri.jrc.ec.europa.eu/sites/default/files/contentype/scoreboard/2025-12/Scoreboard_panel_2025.xlsx"
+  tmpfile <- tempfile(fileext = ".xlsx")
+  download.file(panel_url, tmpfile, mode = "wb")
+  panel_raw <- read_excel(tmpfile, sheet = 1)
+  unlink(tmpfile)
+  message("Panel columns: ", paste(names(panel_raw), collapse = ", "))
+  message("Panel rows: ", nrow(panel_raw))
+  write_parquet(panel_raw, panel_file)
+}
+scoreboard_panel <- read_parquet(panel_file)
+message("Panel: ", nrow(scoreboard_panel), " rows, ", ncol(scoreboard_panel), " cols")
+
+# --- Build combined unique company list from panel + cross-section ---
+# The panel may use a different company column name; detect it
+panel_names <- names(scoreboard_panel)
+panel_company_col <- intersect(c("Company", "company", "Name", "name",
+                                  "Company name", "Company.name"), panel_names)
+if (length(panel_company_col) == 0) {
+  panel_company_col <- panel_names[sapply(scoreboard_panel, is.character)][1]
+} else {
+  panel_company_col <- panel_company_col[1]
+}
+
+# Combined unique company names across all panel years + 2025 cross-section
+all_scoreboard_companies <- unique(c(
+  scoreboard_panel[[panel_company_col]],
+  top_rd$Company
+))
+all_scoreboard_companies <- all_scoreboard_companies[!is.na(all_scoreboard_companies)]
+message("Combined unique companies across all years: ", length(all_scoreboard_companies))
+
 head(top_rd)
-
-
-
 
 
 ```
@@ -321,7 +378,8 @@ if (!file.exists(aliasfile)) {
   api_key <- Sys.getenv("OPENAI_API_KEY")
   if (nchar(api_key) == 0) stop("Set OPENAI_API_KEY in .Renviron and restart R")
 
-  companies <- top_rd %>% pull(Company) %>% unique()
+  # Use the combined list of companies from all panel years + 2025 cross-section
+  companies <- all_scoreboard_companies
 
   # Process in batches of 20 to keep prompt + response manageable
   batch_size <- 20
@@ -592,7 +650,7 @@ library(stringdist)
 
 # Which scoreboard companies got zero matches?
 matched_companies   <- unique(scoreboard_person_mapping$company_raw)
-all_companies       <- unique(top_rd$Company)
+all_companies       <- all_scoreboard_companies
 unmatched_companies <- setdiff(all_companies, matched_companies)
 
 message("Matched: ", length(matched_companies), " / ", length(all_companies))
@@ -811,44 +869,101 @@ firmmap %>% distinct(docdb_family_id) %>% nrow()
 
 ```
 
-#### Step 7: Create firm sector mapping
+#### Step 7: Create firm sector mapping with panel R&D statistics
 
-Map each company to its ICB3 sector classification from the scoreboard.
+Map each company to its ICB3 sector classification (from the 2025 cross-section)
+and compute total and average R&D spending across all panel years (2003–2024).
 
 ```{r}
 library(dplyr)
+library(tidyr)
+library(stringr)
 library(arrow)
 
-# Identify the ICB3 long column name (may vary across scoreboard editions)
+# --- Sector from the 2025 cross-section ---
 icb3_col <- grep("ICB3.*long|ICB3_long", names(top_rd), value = TRUE, ignore.case = TRUE)
 if (length(icb3_col) == 0) {
   message("Available columns: ", paste(names(top_rd), collapse = ", "))
   stop("Could not find ICB3 long column in top_rd")
 }
-message("Using column: ", icb3_col[1])
+message("Using sector column: ", icb3_col[1])
 
-firmsectormap <- top_rd %>%
-  select(company_raw = Company, sector = all_of(icb3_col[1]),
-         RnD = `R&D (€million)`) %>%
-  distinct() %>%
-  filter(company_raw %in% unique(firmmap$company_raw))
+sector_lookup <- top_rd %>%
+  select(company_raw = Company, sector = all_of(icb3_col[1])) %>%
+  distinct()
 
-message("Firm sector map: ", nrow(firmsectormap), " companies with sector classification")
+# --- R&D from the full panel ---
+# Detect panel structure: long (has year column) or wide (year-based columns)
+panel_names <- names(scoreboard_panel)
+year_col <- intersect(c("year", "Year", "YEAR", "Fiscal year",
+                         "fiscal_year", "fyear"), panel_names)
+rd_col <- grep("R&D|R.D|RnD|rd_", panel_names, value = TRUE, ignore.case = TRUE)
+
+if (length(year_col) > 0) {
+  # Long format
+  panel_rd <- scoreboard_panel %>%
+    rename(company_raw = all_of(panel_company_col),
+           year = all_of(year_col[1]),
+           RnD  = all_of(rd_col[1])) %>%
+    select(company_raw, year, RnD) %>%
+    filter(!is.na(company_raw), !is.na(RnD))
+} else {
+  # Wide format: pivot year-based columns to long
+  year_rd_cols <- grep("(19|20)\\d{2}", panel_names, value = TRUE)
+  panel_rd <- scoreboard_panel %>%
+    rename(company_raw = all_of(panel_company_col)) %>%
+    select(company_raw, all_of(year_rd_cols)) %>%
+    pivot_longer(cols = all_of(year_rd_cols),
+                 names_to = "col_name", values_to = "RnD") %>%
+    mutate(year = as.integer(str_extract(col_name, "(19|20)\\d{2}"))) %>%
+    filter(!is.na(year), !is.na(RnD)) %>%
+    select(company_raw, year, RnD)
+}
+
+# Compute total and average R&D per company across all panel years
+panel_rd_summary <- panel_rd %>%
+  group_by(company_raw) %>%
+  summarise(
+    RnD_total = sum(RnD, na.rm = TRUE),
+    RnD_avg   = mean(RnD, na.rm = TRUE),
+    n_years   = n(),
+    .groups   = "drop"
+  )
+
+# --- Combine sector + R&D stats, restricted to firmmap companies ---
+firmmap_companies <- unique(firmmap$company_raw)
+
+firmsectormap <- sector_lookup %>%
+  full_join(panel_rd_summary, by = "company_raw") %>%
+  filter(company_raw %in% firmmap_companies) %>%
+  distinct()
+
+message("Firm sector map: ", nrow(firmsectormap), " companies")
+message("  with sector: ", sum(!is.na(firmsectormap$sector)))
+message("  with R&D panel data: ", sum(!is.na(firmsectormap$RnD_total)))
 
 sectormap_file <- paste0(dropbox_root, "\\Apps\\iseapp\\firmsectormap.parquet")
 write_parquet(firmsectormap, sectormap_file)
 message("Saved to ", sectormap_file)
+
+# Also save the full panel (company x year) for time-series analysis
+panel_matched <- panel_rd %>%
+  filter(company_raw %in% firmmap_companies) %>%
+  left_join(sector_lookup, by = "company_raw")
+
+panel_file_out <- paste0(dropbox_root, "\\Apps\\iseapp\\firmsectormap_panel.parquet")
+write_parquet(panel_matched, panel_file_out)
+message("Panel saved to ", panel_file_out, " (",
+        nrow(panel_matched), " rows, ",
+        n_distinct(panel_matched$company_raw), " companies, ",
+        "years ", min(panel_matched$year), "-", max(panel_matched$year), ")")
+rm(panel_rd, panel_matched); gc()
 
 # Summary by sector
 firmsectormap %>%
   group_by(sector) %>%
   summarise(n_companies = n(), .groups = "drop") %>%
   arrange(desc(n_companies))
-
-
-test=top_rd %>% filter(`ICB3 long`=="Electronic & Electrical Equipment") %>%  arrange(`ICB3 long`,`World rank`)
-
-test %>% head(10) %>% pull(Company) %>% as.vector()
 
 
 filen=paste0(dropbox_root,"/iseapp/countrymap.fst")
