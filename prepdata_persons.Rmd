@@ -630,7 +630,7 @@ if (!file.exists(matchfile)) {
 
   message("Running matching query on BigQuery...")
   tb <- bq_project_query(project_id, match_sql)
-  scoreboard_person_mapping <- bq_table_download(tb)
+  scoreboard_person_mapping <- bq_table_download(tb,page_size=50000)
 
   write_parquet(scoreboard_person_mapping, matchfile)
   message("Saved ", nrow(scoreboard_person_mapping), " rows to ", matchfile)
