@@ -401,7 +401,10 @@ if (!file.exists(aliasfile)) {
       "- Major subsidiaries that file patents\n",
       "- Former names (e.g. FACEBOOK for META)\n",
       "- Common abbreviations or trading names\n",
-      "- Regional variants (e.g. SAMSUNG ELECTRONICS, SAMSUNG SDI)\n\n",
+      "- Regional variants (e.g. SAMSUNG ELECTRONICS, SAMSUNG SDI)\n",
+      "- Abbreviated forms as they commonly appear in patent office records ",
+      "(e.g. 'Elect' for Electronics, 'Int' for International, 'Prop' for ",
+      "Property, 'Amer' for America/American, 'Tech' for Technology)\n\n",
       "Return ONLY a JSON array of objects, each with:\n",
       "  - \"company\": the original name exactly as given\n",
       "  - \"aliases\": array of strings (patent filing names, UPPERCASE)\n\n",
@@ -774,6 +777,248 @@ bq_table_upload(
   write_disposition = "WRITE_TRUNCATE"
 )
 message("Uploaded ", nrow(scoreboard_person_mapping), " rows to patbis.inglobe.scoreboard_person_mapping")
+
+```
+
+
+#### Step 4b: LLM reverse-matching of large unmatched han_names
+
+The alias-based matching (Steps 1–4) misses cases where PATSTAT `han_name`
+uses its own abbreviation conventions (e.g. "Elect" for ELECTRONICS,
+"Int" for INTERNATIONAL). Here we identify large unmatched entities
+(≥500 families) and ask the OpenAI API which scoreboard company
+each one belongs to.
+
+```{r}
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(stringr)
+library(arrow)
+library(bigrquery)
+
+llm_matchfile <- paste0(inglobebig, "\\llm_reverse_matches.parquet")
+
+if (!file.exists(llm_matchfile)) {
+
+  # 1. Find large unmatched han_name entities via BigQuery
+  large_unmatched_sql <- "
+    WITH scoreboard_han_ids AS (
+      SELECT DISTINCT p.han_id
+      FROM `patbis.inglobe.scoreboard_person_mapping` spm
+      INNER JOIN `patbis.fromPATSTAT2021.tls206_person` p
+        ON spm.person_id = p.person_id
+      WHERE p.han_id IS NOT NULL
+    ),
+    holder_han AS (
+      SELECT p.han_id, p.han_name, h.docdb_family_id
+      FROM `patbis.inglobe.holders` h
+      INNER JOIN `patbis.fromPATSTAT2021.tls206_person` p
+        ON h.person_id = p.person_id
+      WHERE p.psn_sector = 'COMPANY'
+        AND p.han_name IS NOT NULL
+        AND TRIM(p.han_name) != ''
+    ),
+    han_counts AS (
+      SELECT han_id, han_name, COUNT(DISTINCT docdb_family_id) AS n_families
+      FROM holder_han
+      GROUP BY han_id, han_name
+      HAVING COUNT(DISTINCT docdb_family_id) >= 500
+    )
+    SELECT hc.*
+    FROM han_counts hc
+    LEFT JOIN scoreboard_han_ids si ON hc.han_id = si.han_id
+    WHERE si.han_id IS NULL
+    ORDER BY n_families DESC
+  "
+
+  message("Finding large unmatched han_name entities...")
+  tb_unmatched <- bq_project_query(project_id, large_unmatched_sql)
+  large_unmatched <- bq_table_download(tb_unmatched)
+  message("Found ", nrow(large_unmatched), " unmatched han_names with >= 500 families")
+
+  if (nrow(large_unmatched) > 0) {
+
+    # 2. Send to OpenAI in batches
+    api_key <- Sys.getenv("OPENAI_API_KEY")
+    if (nchar(api_key) == 0) stop("Set OPENAI_API_KEY in .Renviron and restart R")
+
+    # Build the scoreboard company list for context
+    sb_list <- paste(all_scoreboard_companies, collapse = "\n")
+
+    batch_size <- 50
+    han_names_to_check <- large_unmatched$han_name
+    batches <- split(han_names_to_check,
+                     ceiling(seq_along(han_names_to_check) / batch_size))
+
+    all_llm_matches <- list()
+
+    for (i in seq_along(batches)) {
+      batch <- batches[[i]]
+      message("LLM reverse-match batch ", i, " / ", length(batches),
+              " (", length(batch), " han_names)")
+
+      han_list <- paste(batch, collapse = "\n")
+
+      prompt <- paste0(
+        "Below are two lists:\n\n",
+        "LIST A: Entity names from a patent database (PATSTAT han_name). ",
+        "These names often use abbreviations (e.g. 'Elect' for Electronics, ",
+        "'Int' for International, 'Tech' for Technology, 'Corp' for Corporation, ",
+        "'Prop' for Property, 'Amer' for America).\n\n",
+        "LIST B: EU R&D Scoreboard company names (official company names).\n\n",
+        "For each entity in List A, determine if it clearly corresponds to a ",
+        "company in List B (it could be the company itself, a major subsidiary, ",
+        "a former name, or a regional variant). Only return matches you are ",
+        "confident about.\n\n",
+        "Return ONLY a JSON array. Each element should have:\n",
+        "  - \"han_name\": the exact name from List A\n",
+        "  - \"company_raw\": the exact name from List B that it matches\n",
+        "  - \"confidence\": \"high\" or \"medium\"\n",
+        "  - \"reason\": brief explanation (e.g. \"subsidiary\", \"abbreviated form\", ",
+        "\"former name\")\n\n",
+        "If a han_name does not match any scoreboard company, omit it entirely.\n",
+        "Return valid JSON only, no markdown, no commentary.\n\n",
+        "=== LIST A (patent database entity names) ===\n",
+        han_list, "\n\n",
+        "=== LIST B (EU R&D Scoreboard companies) ===\n",
+        sb_list
+      )
+
+      resp <- request("https://api.openai.com/v1/chat/completions") %>%
+        req_headers(
+          "Authorization" = paste("Bearer", api_key),
+          "Content-Type"  = "application/json"
+        ) %>%
+        req_body_json(list(
+          model       = "gpt-4o-mini",
+          temperature = 0,
+          messages    = list(
+            list(role = "system",
+                 content = paste0(
+                   "You are an expert on multinational corporations, their ",
+                   "subsidiaries, and how they appear in patent databases. ",
+                   "You are familiar with PATSTAT name harmonization conventions. ",
+                   "Return only valid JSON."
+                 )),
+            list(role = "user", content = prompt)
+          )
+        )) %>%
+        req_timeout(180) %>%
+        req_retry(max_tries = 3, backoff = ~ 5) %>%
+        req_perform()
+
+      content <- resp_body_json(resp)
+      reply   <- content$choices[[1]]$message$content
+      reply   <- str_replace_all(reply, "^```json\\s*|```\\s*$", "")
+
+      parsed <- tryCatch(
+        fromJSON(reply, simplifyDataFrame = TRUE),
+        error = function(e) {
+          message("  JSON parse error in batch ", i, ": ", e$message)
+          message("  Raw reply (first 500 chars): ", substr(reply, 1, 500))
+          return(NULL)
+        }
+      )
+
+      if (!is.null(parsed) && nrow(parsed) > 0) {
+        all_llm_matches[[i]] <- parsed
+        message("  Found ", nrow(parsed), " matches in batch ", i)
+      }
+
+      Sys.sleep(2)  # respect rate limits
+    }
+
+    llm_matches <- bind_rows(all_llm_matches)
+
+    if (nrow(llm_matches) > 0) {
+      message("Total LLM matches: ", nrow(llm_matches))
+      print(llm_matches)
+
+      # Save raw LLM output
+      write_parquet(llm_matches, llm_matchfile)
+
+      # 3. Filter for high-confidence matches only
+      high_conf <- llm_matches %>% filter(confidence == "high")
+      message("High-confidence matches: ", nrow(high_conf))
+
+      # Verify company_raw values actually exist in scoreboard list
+      high_conf <- high_conf %>%
+        filter(company_raw %in% all_scoreboard_companies)
+      message("Verified matches (company_raw in scoreboard): ", nrow(high_conf))
+
+      if (nrow(high_conf) > 0) {
+
+        # 4. Look up han_id for each matched han_name
+        llm_han <- large_unmatched %>%
+          inner_join(high_conf, by = "han_name") %>%
+          select(company_raw, han_id, han_name) %>%
+          distinct()
+
+        # Upload to BigQuery for expansion
+        bq_table_upload(
+          x = bq_table(project_id, dataset, "llm_han_matches"),
+          values = llm_han,
+          write_disposition = "WRITE_TRUNCATE"
+        )
+
+        expand_llm_sql <- "
+          SELECT DISTINCT
+            f.company_raw,
+            f.han_name AS alias,
+            'llm_reverse' AS match_type,
+            f.han_id,
+            f.han_name,
+            p.person_id,
+            p.person_name,
+            p.person_ctry_code
+          FROM `patbis.inglobe.llm_han_matches` f
+          INNER JOIN `patbis.fromPATSTAT2021.tls206_person` p
+            ON f.han_id = p.han_id
+          INNER JOIN (
+            SELECT DISTINCT person_id
+            FROM `patbis.inglobe.holders`
+          ) h
+            ON p.person_id = h.person_id
+        "
+        tb_llm <- bq_project_query(project_id, expand_llm_sql)
+        llm_expanded <- bq_table_download(tb_llm)
+
+        message("LLM matches expanded to ", nrow(llm_expanded), " person_id rows")
+
+        # 5. Merge into main mapping
+        scoreboard_person_mapping <- bind_rows(
+          scoreboard_person_mapping,
+          llm_expanded
+        ) %>% distinct()
+
+        # Re-save locally and to BigQuery
+        write_parquet(scoreboard_person_mapping, matchfile)
+        bq_table_upload(
+          x = bq_table(project_id, dataset, "scoreboard_person_mapping"),
+          values = scoreboard_person_mapping,
+          write_disposition = "WRITE_TRUNCATE"
+        )
+        message("Updated mapping saved: ", nrow(scoreboard_person_mapping),
+                " total rows (including LLM reverse matches)")
+      }
+    } else {
+      message("No LLM matches found")
+      write_parquet(tibble(han_name = character(), company_raw = character(),
+                           confidence = character(), reason = character()),
+                    llm_matchfile)
+    }
+  } else {
+    message("No large unmatched entities found — skipping LLM step")
+    write_parquet(tibble(han_name = character(), company_raw = character(),
+                         confidence = character(), reason = character()),
+                  llm_matchfile)
+  }
+} else {
+  message("LLM reverse matches already cached: ", llm_matchfile)
+  llm_matches <- read_parquet(llm_matchfile)
+  message("  ", nrow(llm_matches), " matches on file")
+}
 
 ```
 
