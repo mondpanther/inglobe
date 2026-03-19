@@ -54,7 +54,7 @@ if (!file.exists(personfile)) {
 }
 
 persons_address=read_parquet(personfile)
-head(persons_address)
+#head(persons_address)
 
 ```
 
@@ -89,7 +89,7 @@ if (!file.exists(filen)) {
 }
 
 persons=read_parquet(filen)
-head(persons)
+#head(persons)
 
 ```
 
@@ -174,13 +174,31 @@ if (length(panel_company_col) == 0) {
   panel_company_col <- panel_company_col[1]
 }
 
+# Canonicalize company names: strip legal suffixes that cause near-duplicates
+# across panel years (e.g. "4D MOLECULAR THERAPEUTICS" vs
+# "4D MOLECULAR THERAPEUTICS, INC."). Same regex used later for alias cleaning.
+clean_company_raw <- function(x) {
+  x %>%
+    toupper() %>%
+    str_replace_all("[.,;:!?'\"\\-]", " ") %>%
+    str_replace_all(
+      "\\b(PLC|LTD|LIMITED|INC|INCORPORATED|CORP|CORPORATION|CO|COMPANY|GROUP|HOLDINGS|HOLDING|AG|GMBH|SA|SPA|NV|BV|SE|AS|KK|OYJ|AB|A/S|SRL|LLC|LP|& CO)\\b",
+      ""
+    ) %>%
+    str_replace_all("\\s+", " ") %>%
+    str_trim()
+}
+
 # Combined unique company names across all panel years + 2025 cross-section
-all_scoreboard_companies <- unique(c(
+# Apply clean_company_raw to canonicalize before deduplication
+all_scoreboard_companies <- unique(clean_company_raw(c(
   scoreboard_panel[[panel_company_col]],
   top_rd$Company
-))
-all_scoreboard_companies <- all_scoreboard_companies[!is.na(all_scoreboard_companies)]
-message("Combined unique companies across all years: ", length(all_scoreboard_companies))
+)))
+all_scoreboard_companies <- all_scoreboard_companies[!is.na(all_scoreboard_companies) &
+                                                      nchar(all_scoreboard_companies) >= 2]
+message("Combined unique companies across all years (after cleaning): ",
+        length(all_scoreboard_companies))
 
 head(top_rd)
 
@@ -246,15 +264,15 @@ if (!file.exists(filen)) {
   # Convert to data.table if not already
   setDT(df)
   # Method A: Using .SD
-  df <- df[order(docdb_family_id, appln_filing_year), .SD[1], by = docdb_family_id]
+  #df <- df[order(docdb_family_id, appln_filing_year), .SD[1], by = docdb_family_id]
   
   
-  ISEAPP_PATH_LOCAL=paste0(dropbox_root,"\\Apps\\iseapp\\")
-  write_fst(df,paste0(ISEAPP_PATH_LOCAL,"first_appli.fst"),compress=100)
+  #ISEAPP_PATH_LOCAL=paste0(dropbox_root,"\\Apps\\iseapp\\")
+  #write_fst(df,paste0(ISEAPP_PATH_LOCAL,"first_appli.fst"),compress=100)
   
   
-  pat2009t2018=df %>% filter(appln_filing_year>=2009 & appln_filing_year<=2018)
-  pat2009t2018=pat2009t2018 %>% select(docdb_family_id)
+  #pat2009t2018=df %>% filter(appln_filing_year>=2009 & appln_filing_year<=2018)
+  #pat2009t2018=pat2009t2018 %>% select(docdb_family_id)
 
 ```
 
@@ -419,6 +437,7 @@ if (!file.exists(aliasfile)) {
         "Authorization" = paste("Bearer", api_key),
         "Content-Type"  = "application/json"
       ) %>%
+      req_options(http_version = 2) %>%
       req_body_json(list(
         model       = "gpt-4o-mini",
         temperature = 0,
@@ -846,7 +865,7 @@ if (!file.exists(llm_matchfile)) {
     # Build the scoreboard company list for context
     sb_list <- paste(all_scoreboard_companies, collapse = "\n")
 
-    batch_size <- 50
+    batch_size <- 30
     han_names_to_check <- large_unmatched$han_name
     batches <- split(han_names_to_check,
                      ceiling(seq_along(han_names_to_check) / batch_size))
@@ -890,9 +909,11 @@ if (!file.exists(llm_matchfile)) {
           "Authorization" = paste("Bearer", api_key),
           "Content-Type"  = "application/json"
         ) %>%
+        req_options(http_version = 2) %>%
         req_body_json(list(
           model       = "gpt-4o-mini",
           temperature = 0,
+          max_tokens  = 16000,
           messages    = list(
             list(role = "system",
                  content = paste0(
@@ -904,8 +925,8 @@ if (!file.exists(llm_matchfile)) {
             list(role = "user", content = prompt)
           )
         )) %>%
-        req_timeout(180) %>%
-        req_retry(max_tries = 3, backoff = ~ 5) %>%
+        req_timeout(2000) %>%
+        req_retry(max_tries = 3, backoff = ~ 10) %>%
         req_perform()
 
       content <- resp_body_json(resp)
@@ -1133,8 +1154,10 @@ if (length(icb3_col) == 0) {
 }
 message("Using sector column: ", icb3_col[1])
 
+# Apply clean_company_raw so sector_lookup uses the same canonical names
 sector_lookup <- top_rd %>%
-  select(company_raw = Company, sector = all_of(icb3_col[1])) %>%
+  mutate(company_raw = clean_company_raw(Company)) %>%
+  select(company_raw, sector = all_of(icb3_col[1])) %>%
   distinct()
 
 # --- R&D from the full panel ---
@@ -1145,18 +1168,18 @@ year_col <- intersect(c("year", "Year", "YEAR", "Fiscal year",
 rd_col <- grep("R&D|R.D|RnD|rd_", panel_names, value = TRUE, ignore.case = TRUE)
 
 if (length(year_col) > 0) {
-  # Long format
+  # Long format — canonicalize company names to match firmmap
   panel_rd <- scoreboard_panel %>%
-    rename(company_raw = all_of(panel_company_col),
-           year = all_of(year_col[1]),
+    mutate(company_raw = clean_company_raw(.data[[panel_company_col]])) %>%
+    rename(year = all_of(year_col[1]),
            RnD  = all_of(rd_col[1])) %>%
     select(company_raw, year, RnD) %>%
     filter(!is.na(company_raw), !is.na(RnD))
 } else {
-  # Wide format: pivot year-based columns to long
+  # Wide format: pivot year-based columns to long — canonicalize company names
   year_rd_cols <- grep("(19|20)\\d{2}", panel_names, value = TRUE)
   panel_rd <- scoreboard_panel %>%
-    rename(company_raw = all_of(panel_company_col)) %>%
+    mutate(company_raw = clean_company_raw(.data[[panel_company_col]])) %>%
     select(company_raw, all_of(year_rd_cols)) %>%
     pivot_longer(cols = all_of(year_rd_cols),
                  names_to = "col_name", values_to = "RnD") %>%
