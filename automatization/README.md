@@ -8,7 +8,7 @@ Geocodes persons from `patbis.fromPATSTAT2025.tls206_person_with_address` using 
 2. Get the `patbis-b85b8ca5802e.json` credentials file from the project owner and drop it in this folder
 3. Install dependencies:
 ```bash
-pip install google-cloud-bigquery google-auth geopy pandas tqdm pyarrow python-dotenv
+pip install google-cloud-bigquery google-auth geopy pandas tqdm pyarrow python-dotenv db-dtypes
 ```
 
 ## Run
