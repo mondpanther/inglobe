@@ -5,3 +5,8 @@
 .Renviron
 .httr-oauth
 dropbox_token.rds
+.claude/
+
+# BigQuery service account credentials
+automatization/patbis-*.json
+automatization/*service-account*.json
