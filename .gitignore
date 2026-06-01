@@ -7,6 +7,11 @@
 dropbox_token.rds
 .claude/
 
-# BigQuery service account credentials
+.DS_Store
+
+# BigQuery / Google service account credentials (any location)
+patbis-*.json
+*service-account*.json
+*-service-account.json
 automatization/patbis-*.json
 automatization/*service-account*.json
